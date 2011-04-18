@@ -1,0 +1,11 @@
+* WHAT
+  echoev is a simple TCP echo server, built on libev.
+
+* WHY
+  I wrote echoev to get some experience with libev.
+
+* INSTALLING
+  1. In the Makefile, uncomment the PLATFORM define for your platform.
+  2. Set the INCLUDES and LIBS Makefile variables to point to your
+     libev install, if it's in a non-standard location.
+  3. make
