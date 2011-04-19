@@ -112,10 +112,7 @@ int listen_on(const struct sockaddr *addr, socklen_t addr_len)
         log_err("socket");
         return -1;
     }
-    if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-        log_err("fcntl");
-        goto err;
-    }
+    fcntl(fd, F_SETFL, O_NONBLOCK);
     if (bind(fd, addr, addr_len) == -1) {
         log_err("bind");
         goto err;
