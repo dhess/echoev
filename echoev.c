@@ -189,7 +189,9 @@ int main(int argc, char *argv[])
         exit(errno);
 #endif
     
+    log_debug("entering ev_run");
     ev_run(loop, 0);
-    
+
+    log_debug("ev_run exited");
     return 0;
 }
