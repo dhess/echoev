@@ -39,27 +39,27 @@
 #include <ctype.h>
 #include <ev.h>
 
-static void log_msg(const char *msg)
+void log_msg(const char *msg)
 {
     puts(msg);
 }
 
-static void log_err(const char *errmsg)
+void log_err(const char *errmsg)
 {
     perror(errmsg);
 }
 
-static void log_notice(const char *msg)
+void log_notice(const char *msg)
 {
     log_msg(msg);
 }
 
-static void log_debug(const char *msg)
+void log_debug(const char *msg)
 {
     log_msg(msg);
 }
 
-static void log_connection(const struct sockaddr_storage *addr,
+void log_connection(const struct sockaddr_storage *addr,
                            socklen_t addr_len)
 {
     char ip[INET6_ADDRSTRLEN];
@@ -71,7 +71,7 @@ static void log_connection(const struct sockaddr_storage *addr,
     log_notice(inet_ntop(addr->ss_family, src, ip, INET6_ADDRSTRLEN));
 }
 
-static void listen_cb(EV_P_ ev_io *w, int revents)
+void listen_cb(EV_P_ ev_io *w, int revents)
 {
     log_debug("listen_cb called");
 
