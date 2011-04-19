@@ -71,6 +71,58 @@ void log_connection(const struct sockaddr_storage *addr,
     log_notice(inet_ntop(addr->ss_family, src, ip, INET6_ADDRSTRLEN));
 }
 
+#define MAX_MSG 4096
+
+typedef struct echo_io
+{
+    ev_io io;
+    size_t nread;
+    char buf[MAX_MSG];
+} echo_io;
+    
+void read_cb(EV_P_ ev_io *w_, int revents)
+{
+    log_debug("read_cb called");
+
+    echo_io *w = (echo_io *) w_;
+    while (true) {
+
+        /* save room for terminating '\0' */
+        ssize_t n = recv(w->io.fd, &w->buf[w->nread], MAX_MSG - w->nread - 1, 0);
+        if (n == 0) {
+            /* eof */
+            w->buf[w->nread] = '\0';
+            goto stop_watcher;
+        } else if (n == -1) {
+            if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
+                return;  /* no more data for now */
+            else {
+                log_err("recv");
+                goto stop_watcher;
+            }
+        } else
+            w->nread += n;
+    }
+        
+  stop_watcher:
+    log_notice("closing connection");
+    ev_io_stop(EV_A_ &w->io);
+    close(w->io.fd);
+    free(w);
+}
+
+echo_io *make_reader(int wfd)
+{
+    fcntl(wfd, F_SETFL, O_NONBLOCK);
+
+    echo_io *watcher = malloc(sizeof(echo_io));
+    if (watcher) {
+        watcher->nread = 0;
+        ev_io_init(&watcher->io, read_cb, wfd, EV_READ);
+    }
+    return watcher;
+}
+
 void listen_cb(EV_P_ ev_io *w, int revents)
 {
     log_debug("listen_cb called");
@@ -92,8 +144,12 @@ void listen_cb(EV_P_ ev_io *w, int revents)
         }
 
         log_connection(&addr, addr_len);
-        log_notice("closing connection");
-        close(fd);
+        echo_io *reader = make_reader(fd);
+        if (!reader) {
+            log_err("make_reader");
+            close(fd);
+        } else
+            ev_io_start(EV_A_ &reader->io);
     }
 }
 
@@ -139,8 +195,6 @@ ev_io *make_listener(const struct sockaddr *addr, socklen_t addr_len)
         ev_io_init(watcher, listen_cb, listen_fd, EV_READ);
     return watcher;
 }
-
-
                      
 const uint16_t port = 7777;
 
