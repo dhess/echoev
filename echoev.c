@@ -160,9 +160,24 @@ void listen_cb(EV_P_ ev_io *w, int revents)
 
         int fd = accept(w->fd, (struct sockaddr *) &addr, &addr_len);
         if (fd == -1) {
-            if (errno != EWOULDBLOCK)
+
+            /*
+             * EWOULDBLOCK and EAGAIN mean no more connections to
+             * accept.  ECONNABORTED and EPROTO mean the client has
+             * aborted the connection, so just ignore it. EINTR means
+             * we were interrupted by a signal. (We could re-try the
+             * accept in case of EINTR, but we choose not to, in the
+             * interest of making forward progress.)
+             */
+            if ((errno == EWOULDBLOCK) ||
+                (errno == ECONNABORTED) ||
+                (errno == EPROTO) ||
+                (errno == EINTR))
+                break;
+            else {
                 log_err("accept");
-            break;
+                break;
+            }
         }
 
         log_connection(&addr, addr_len);
