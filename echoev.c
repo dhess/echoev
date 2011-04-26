@@ -192,6 +192,11 @@ int listen_on(const struct sockaddr *addr, socklen_t addr_len)
     }
     if (set_nonblocking(fd) == -1)
         goto err;
+    const int on = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) {
+        log_err("setsockopt");
+        return -1;
+    }
     if (bind(fd, addr, addr_len) == -1) {
         log_err("bind");
         goto err;
