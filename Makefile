@@ -19,7 +19,7 @@ help:
 	@echo "help - this message."
 
 echoev: echoev.o
-	$(LD) -o echoev $(LDFLAGS) -lev $<
+	$(LD) -o echoev $(LDFLAGS) -lev $?
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $<
