@@ -207,12 +207,14 @@ int main(int argc, char *argv[])
      *
      * The Linux kernel maps both IPv4 and IPv6 wildcard binds to the
      * same local port space, in which case only one family can be
-     * bound to a given port, and the IPv6 wildcard bind will see both
-     * IPv4 and IPv6 traffic. BSD-based platforms (e.g., Mac OS X)
+     * bound to a given port. An IPv6 wildcard bind will see both IPv4
+     * and IPv6 traffic. BSD-based platforms (e.g., Mac OS X)
      * recommend listening on two sockets for the same port, one for
      * IPv4 and one for IPv6, when you want to accept traffic for both
      * transports, especially when access control (firewalling) is in
      * effect.
+     *
+     * OpenBSD simply won't route IPv4 traffic to IPv6 sockets.
      */
 
     struct sockaddr_in6 saddr6;
