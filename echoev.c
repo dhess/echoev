@@ -80,6 +80,27 @@ typedef struct echo_io
     char buf[MAX_MSG];
 } echo_io;
     
+/*
+ * Make an existing socket non-blocking.
+ *
+ * Return 0 if successful, otherwise -1, in which case the error is
+ * logged, and the error code is left in errno.
+ */
+int set_nonblocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) {
+        log_err("fcntl");
+        return -1;
+    }
+    flags |= O_NONBLOCK;
+    if (fcntl(fd, F_SETFL, flags) == -1) {
+        log_err("fcntl");
+        return -1;
+    }
+    return 0;
+}
+
 void read_cb(EV_P_ ev_io *w_, int revents)
 {
     log_debug("read_cb called");
@@ -113,7 +134,8 @@ void read_cb(EV_P_ ev_io *w_, int revents)
 
 echo_io *make_reader(int wfd)
 {
-    fcntl(wfd, F_SETFL, O_NONBLOCK);
+    if (set_nonblocking(wfd) == -1)
+        return 0;
 
     echo_io *watcher = malloc(sizeof(echo_io));
     if (watcher) {
@@ -168,7 +190,8 @@ int listen_on(const struct sockaddr *addr, socklen_t addr_len)
         log_err("socket");
         return -1;
     }
-    fcntl(fd, F_SETFL, O_NONBLOCK);
+    if (set_nonblocking(fd) == -1)
+        goto err;
     if (bind(fd, addr, addr_len) == -1) {
         log_err("bind");
         goto err;
