@@ -201,7 +201,7 @@ int listen_on(const struct sockaddr *addr, socklen_t addr_len)
         log_err("bind");
         goto err;
     }
-    if (listen(fd, 0) == -1) {
+    if (listen(fd, 8) == -1) {
         log_err("listen");
         goto err;
     }
