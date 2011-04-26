@@ -171,7 +171,9 @@ void listen_cb(EV_P_ ev_io *w, int revents)
              */
             if ((errno == EWOULDBLOCK) ||
                 (errno == ECONNABORTED) ||
+#ifndef ECHOEV_PLATFORM_BSD
                 (errno == EPROTO) ||
+#endif
                 (errno == EINTR))
                 break;
             else {
