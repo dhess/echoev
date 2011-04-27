@@ -37,6 +37,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <ctype.h>
+#include <signal.h>
 #include <ev.h>
 
 void log_msg(const char *msg)
@@ -245,6 +246,16 @@ const uint16_t port = 7777;
 
 int main(int argc, char *argv[])
 {
+    /* Ignore SIGPIPE. */
+    struct sigaction sa, osa;
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGPIPE, &sa, &osa) == -1) {
+        log_err("sigaction");
+        exit(errno);
+    }
+    
     struct ev_loop *loop = EV_DEFAULT;
 
     /*
