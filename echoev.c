@@ -76,21 +76,22 @@ void log_notice(const char *msg)
     log_msg(msg);
 }
 
-void log_debug(const char *msg)
-{
-    log_msg(msg);
-}
-
-void log_connection(const struct sockaddr_storage *addr)
+static void
+log_notice_with_addr(const char *fmt, const struct sockaddr_storage *addr)
 {
     char ip[INET6_ADDRSTRLEN];
     if (!inet_ntop_any(addr, ip, INET6_ADDRSTRLEN))
-        log_err("log_connection inet_ntop");
+        log_err("log_notice_with_addr inet_ntop");
     else {
         char msg[MAX_LOG];
-        snprintf(msg, sizeof(msg), "connection from %s", ip);
+        snprintf(msg, sizeof(msg), fmt, ip);
         log_notice(msg);
     }
+}
+
+void log_debug(const char *msg)
+{
+    log_msg(msg);
 }
 
 #define MAX_MSG 4096
@@ -127,6 +128,8 @@ void read_cb(EV_P_ ev_io *w_, int revents)
 {
     log_debug("read_cb called");
 
+    struct sockaddr_storage addr;
+    socklen_t addr_len = sizeof(addr);
     echo_io *w = (echo_io *) w_;
     while (true) {
 
@@ -148,7 +151,10 @@ void read_cb(EV_P_ ev_io *w_, int revents)
     }
         
   stop_watcher:
-    log_notice("closing connection");
+    if (getpeername(w->io.fd, (struct sockaddr *) &addr, &addr_len) == -1)
+        log_err("read_cb getpeername");
+    else
+        log_notice_with_addr("closed connection from %s", &addr);
     ev_io_stop(EV_A_ &w->io);
     close(w->io.fd);
     free(w);
@@ -204,7 +210,7 @@ void listen_cb(EV_P_ ev_io *w, int revents)
             }
         }
 
-        log_connection(&addr);
+        log_notice_with_addr("accepted connection from %s", &addr);
         echo_io *reader = make_reader(fd);
         if (!reader) {
             log_err("make_reader");
