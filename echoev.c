@@ -132,14 +132,10 @@ void read_cb(EV_P_ ev_io *w_, int revents)
     socklen_t addr_len = sizeof(addr);
     echo_io *w = (echo_io *) w_;
     while (true) {
-
-        /* save room for terminating '\0' */
-        ssize_t n = recv(w->io.fd, &w->buf[w->nread], MAX_MSG - w->nread - 1, 0);
-        if (n == 0) {
-            /* eof */
-            w->buf[w->nread] = '\0';
-            goto stop_watcher;
-        } else if (n == -1) {
+        ssize_t n = recv(w->io.fd, &w->buf[w->nread], MAX_MSG - w->nread, 0);
+        if (n == 0)
+            goto stop_watcher;  /* eof */
+        else if (n == -1) {
             if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
                 return;  /* no more data for now */
             else {
