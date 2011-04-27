@@ -40,6 +40,25 @@
 #include <signal.h>
 #include <ev.h>
 
+/*
+ * An address family-agnostic wrapper around inet_ntop. dst is the
+ * character string to which the presentation format string will be
+ * written, and size is the length of that string.
+ *
+ * Returns a pointer to dst if successful, 0 if not, in which case
+ * errno is set.
+ */
+const char *
+inet_ntop_any(const struct sockaddr_storage *addr, char *dst, socklen_t size)
+{
+    const void *src;
+    if (addr->ss_family == AF_INET)
+        src = &((const struct sockaddr_in *) addr)->sin_addr;
+    else
+        src = &((const struct sockaddr_in6 *) addr)->sin6_addr;
+    return inet_ntop(addr->ss_family, src, dst, size);
+}
+ 
 void log_msg(const char *msg)
 {
     puts(msg);
@@ -60,16 +79,13 @@ void log_debug(const char *msg)
     log_msg(msg);
 }
 
-void log_connection(const struct sockaddr_storage *addr,
-                           socklen_t addr_len)
+void log_connection(const struct sockaddr_storage *addr)
 {
     char ip[INET6_ADDRSTRLEN];
-    const void *src;
-    if (addr->ss_family == AF_INET)
-        src = &((const struct sockaddr_in *) addr)->sin_addr;
+    if (!inet_ntop_any(addr, ip, INET6_ADDRSTRLEN))
+        log_err("log_connection inet_ntop");
     else
-        src = &((const struct sockaddr_in6 *) addr)->sin6_addr;
-    log_notice(inet_ntop(addr->ss_family, src, ip, INET6_ADDRSTRLEN));
+        log_notice(ip);
 }
 
 #define MAX_MSG 4096
@@ -183,7 +199,7 @@ void listen_cb(EV_P_ ev_io *w, int revents)
             }
         }
 
-        log_connection(&addr, addr_len);
+        log_connection(&addr);
         echo_io *reader = make_reader(fd);
         if (!reader) {
             log_err("make_reader");
