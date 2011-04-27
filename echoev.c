@@ -58,7 +58,9 @@ inet_ntop_any(const struct sockaddr_storage *addr, char *dst, socklen_t size)
         src = &((const struct sockaddr_in6 *) addr)->sin6_addr;
     return inet_ntop(addr->ss_family, src, dst, size);
 }
- 
+
+#define MAX_LOG 256
+
 void log_msg(const char *msg)
 {
     puts(msg);
@@ -84,8 +86,11 @@ void log_connection(const struct sockaddr_storage *addr)
     char ip[INET6_ADDRSTRLEN];
     if (!inet_ntop_any(addr, ip, INET6_ADDRSTRLEN))
         log_err("log_connection inet_ntop");
-    else
-        log_notice(ip);
+    else {
+        char msg[MAX_LOG];
+        snprintf(msg, sizeof(msg), "connection from %s", ip);
+        log_notice(msg);
+    }
 }
 
 #define MAX_MSG 4096
