@@ -124,36 +124,43 @@ int set_nonblocking(int fd)
     return 0;
 }
 
-void read_cb(EV_P_ ev_io *w_, int revents)
+void
+stop_echo_watcher(EV_P_ echo_io *w)
 {
-    log_debug("read_cb called");
-
     struct sockaddr_storage addr;
     socklen_t addr_len = sizeof(addr);
-    echo_io *w = (echo_io *) w_;
-    while (true) {
-        ssize_t n = recv(w->io.fd, &w->buf[w->nread], MAX_MSG - w->nread, 0);
-        if (n == 0)
-            goto stop_watcher;  /* eof */
-        else if (n == -1) {
-            if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
-                return;  /* no more data for now */
-            else {
-                log_err("recv");
-                goto stop_watcher;
-            }
-        } else
-            w->nread += n;
-    }
-        
-  stop_watcher:
     if (getpeername(w->io.fd, (struct sockaddr *) &addr, &addr_len) == -1)
-        log_err("read_cb getpeername");
+        log_err("stop_echo_watcher getpeername");
     else
         log_notice_with_addr("closed connection from %s", &addr);
     ev_io_stop(EV_A_ &w->io);
     close(w->io.fd);
     free(w);
+}
+
+void read_cb(EV_P_ ev_io *w_, int revents)
+{
+    log_debug("read_cb called");
+
+    echo_io *w = (echo_io *) w_;
+    while (true) {
+        ssize_t n = recv(w->io.fd, &w->buf[w->nread], MAX_MSG - w->nread, 0);
+        if (n == 0) {
+            /* eof */
+            stop_echo_watcher(EV_A_ w);
+            return;
+        }
+        else if (n == -1) {
+            if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
+                return;  /* no more data for now */
+            else {
+                log_err("recv");
+                stop_echo_watcher(EV_A_ w);
+                return;
+            }
+        } else
+            w->nread += n;
+    }
 }
 
 echo_io *make_reader(int wfd)
