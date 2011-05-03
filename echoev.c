@@ -151,7 +151,7 @@ void read_cb(EV_P_ ev_io *w_, int revents)
             return;
         }
         else if (n == -1) {
-            if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
+            if ((errno == EAGAIN) || (errno == EWOULDBLOCK) || (errno == EINTR))
                 return;  /* no more data for now */
             else {
                 log_err("recv");
