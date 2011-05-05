@@ -71,6 +71,12 @@ void log_err(const char *errmsg)
     perror(errmsg);
 }
 
+void
+log_warn(const char *msg)
+{
+    log_msg(msg);
+}
+
 void log_notice(const char *msg)
 {
     log_msg(msg);
@@ -94,13 +100,13 @@ void log_debug(const char *msg)
     log_msg(msg);
 }
 
-#define MAX_MSG 4096
+#define MAX_LINE 4096
 
 typedef struct echo_io
 {
     ev_io io;
     size_t nread;
-    char buf[MAX_MSG];
+    char buf[MAX_LINE];
 } echo_io;
     
 /*
@@ -143,8 +149,8 @@ void read_cb(EV_P_ ev_io *w_, int revents)
     log_debug("read_cb called");
 
     echo_io *w = (echo_io *) w_;
-    while (true) {
-        ssize_t n = recv(w->io.fd, &w->buf[w->nread], MAX_MSG - w->nread, 0);
+    while (MAX_LINE - w->nread) {
+        ssize_t n = recv(w->io.fd, &w->buf[w->nread], MAX_LINE - w->nread, 0);
         if (n == 0) {
             /* eof */
             stop_echo_watcher(EV_A_ w);
@@ -161,6 +167,10 @@ void read_cb(EV_P_ ev_io *w_, int revents)
         } else
             w->nread += n;
     }
+
+    /* out of space */
+    log_warn("client buffer overflow");
+    stop_echo_watcher(EV_A_ w);
 }
 
 echo_io *make_reader(int wfd)
