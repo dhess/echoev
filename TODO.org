@@ -3,6 +3,8 @@
 
 * Only echo back whole records at a time (delimited by '\n').
 
+* Double-check all "funky" cases listed in ev man page and in UNPv1.
+
 * Tunable logging (via command-line switches).
 
 * Listen on a specified port number.
