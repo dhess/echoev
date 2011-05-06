@@ -419,12 +419,12 @@ void listen_cb(EV_P_ ev_io *w, int revents)
         }
 
         log_notice_with_addr("accepted connection from %s", &addr);
-        echo_io *reader = make_watcher(fd);
-        if (!reader) {
+        echo_io *watcher = make_watcher(fd);
+        if (!watcher) {
             log_err("make_watcher");
             close(fd);
         } else
-            ev_io_start(EV_A_ &reader->io);
+            ev_io_start(EV_A_ &watcher->io);
     }
 }
 
