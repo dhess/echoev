@@ -278,7 +278,7 @@ void read_cb(EV_P_ ev_io *w_, int revents)
     stop_echo_watcher(EV_A_ w);
 }
 
-echo_io *make_reader(int wfd)
+echo_io *make_watcher(int wfd)
 {
     if (set_nonblocking(wfd) == -1)
         return 0;
@@ -329,9 +329,9 @@ void listen_cb(EV_P_ ev_io *w, int revents)
         }
 
         log_notice_with_addr("accepted connection from %s", &addr);
-        echo_io *reader = make_reader(fd);
+        echo_io *reader = make_watcher(fd);
         if (!reader) {
-            log_err("make_reader");
+            log_err("make_watcher");
             close(fd);
         } else
             ev_io_start(EV_A_ &reader->io);
