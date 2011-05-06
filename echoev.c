@@ -266,7 +266,7 @@ void read_cb(EV_P_ ev_io *w_, int revents)
             if ((errno == EAGAIN) || (errno == EWOULDBLOCK) || (errno == EINTR))
                 return;  /* no more data for now */
             else {
-                log_err("recv");
+                log_err("read");
                 stop_echo_watcher(EV_A_ w);
                 return;
             }
