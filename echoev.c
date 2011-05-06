@@ -38,6 +38,7 @@
 #include <sys/socket.h>
 #include <ctype.h>
 #include <signal.h>
+#include <assert.h>
 #include <ev.h>
 
 /*
@@ -100,13 +101,118 @@ void log_debug(const char *msg)
     log_msg(msg);
 }
 
-#define MAX_LINE 4096
+#define MAX_MSG 4096
+
+/*
+ * Naive ring buffer FIFO implementation, with a sentinel element used
+ * to indicate the "full" condition.
+ *
+ * The ring buffer's head pointer points to the starting location
+ * where data should be written when copying data *into* the buffer
+ * (e.g., with ringbuf_read). The ring buffer's tail pointer points to
+ * the starting location where data should be read when copying data
+ * *from* the buffer (e.g., with ringbuf_write).
+ */
+
+typedef struct ringbuf_t
+{
+    char *head, *tail;
+    char buf[MAX_MSG];
+} ringbuf_t;
+
+void
+ringbuf_init(ringbuf_t *rb)
+{
+    rb->head = rb->tail = rb->buf;
+}
+
+size_t
+ringbuf_size(ringbuf_t *rb)
+{
+    /* There's always one unused element */
+    return MAX_MSG - 1;
+}
+
+size_t
+ringbuf_bytes_free(ringbuf_t *rb)
+{
+    if (rb->head >= rb->tail)
+        return ringbuf_size(rb) - (rb->head - rb->tail);
+    else
+        return rb->tail - rb->head - 1;
+}
+
+bool
+ringbuf_full(ringbuf_t *rb)
+{
+    return ringbuf_bytes_free(rb) == 0;
+}
+
+char *
+ringbuf_tail(ringbuf_t *rb)
+{
+    return rb->tail;
+}
+
+char *
+ringbuf_head(ringbuf_t *rb)
+{
+    return rb->head;
+}
+
+/*
+ * This function calls read(2) and returns its value. It will only
+ * call read(2) once, and may return a short count. If you get a short
+ * count and want to keep reading from the file descriptor, simply
+ * call the function again.
+ *
+ * The primary purpose of this function is to properly handle the case
+ * where the ring buffer must wrap around the end of the allocated
+ * contiguous buffer space.
+ *
+ * This function will happily overflow the ring buffer without
+ * complaint. This permits the user to, e.g., discard data from a
+ * pipe/socket that she doesn't care about in order to advance the
+ * stream. When an overflow occurs, the state of the ring buffer is
+ * guaranteed to be consistent, including the head and tail pointers.
+ */
+
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+
+ssize_t
+ringbuf_read(int fd, ringbuf_t *rb, size_t count)
+{
+    char *bufend = rb->buf + MAX_MSG;
+    size_t nfree = ringbuf_bytes_free(rb);
+
+    /* don't read beyond the end of the buffer */
+    count = MIN(bufend - rb->head, count);
+    ssize_t n = read(fd, (void *) rb->head, count);
+    if (n > 0) {
+        assert(rb->head + n <= bufend);
+        rb->head += n;
+
+        /* wrap? */
+        if (rb->head == bufend)
+            rb->head = rb->buf;
+
+        /* fix up the tail pointer if an overflow occurred */
+        if (n > nfree) {
+            if (rb->head + 1 == bufend)
+                rb->tail = rb->buf;
+            else
+                rb->tail = rb->head + 1;
+            assert(ringbuf_full(rb));
+        }
+    }
+
+    return n;
+}
 
 typedef struct echo_io
 {
     ev_io io;
-    size_t nread;
-    char buf[MAX_LINE];
+    ringbuf_t rb;
 } echo_io;
     
 /*
@@ -149,8 +255,8 @@ void read_cb(EV_P_ ev_io *w_, int revents)
     log_debug("read_cb called");
 
     echo_io *w = (echo_io *) w_;
-    while (MAX_LINE - w->nread) {
-        ssize_t n = recv(w->io.fd, &w->buf[w->nread], MAX_LINE - w->nread, 0);
+    while (ringbuf_bytes_free(&w->rb)) {
+        ssize_t n = ringbuf_read(w->io.fd, &w->rb, ringbuf_bytes_free(&w->rb));
         if (n == 0) {
             /* eof */
             stop_echo_watcher(EV_A_ w);
@@ -164,12 +270,11 @@ void read_cb(EV_P_ ev_io *w_, int revents)
                 stop_echo_watcher(EV_A_ w);
                 return;
             }
-        } else
-            w->nread += n;
+        }
     }
 
-    /* out of space */
-    log_warn("client buffer overflow");
+    /* overflow */
+    log_warn("read buffer full");
     stop_echo_watcher(EV_A_ w);
 }
 
@@ -180,7 +285,7 @@ echo_io *make_reader(int wfd)
 
     echo_io *watcher = malloc(sizeof(echo_io));
     if (watcher) {
-        watcher->nread = 0;
+        ringbuf_init(&watcher->rb);
         ev_io_init(&watcher->io, read_cb, wfd, EV_READ);
     }
     return watcher;
