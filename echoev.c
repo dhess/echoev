@@ -62,12 +62,14 @@ inet_ntop_any(const struct sockaddr_storage *addr, char *dst, socklen_t size)
 
 #define MAX_LOG 256
 
-void log_msg(const char *msg)
+void
+log_msg(const char *msg)
 {
     puts(msg);
 }
 
-void log_err(const char *errmsg)
+void
+log_err(const char *errmsg)
 {
     perror(errmsg);
 }
@@ -78,7 +80,8 @@ log_warn(const char *msg)
     log_msg(msg);
 }
 
-void log_notice(const char *msg)
+void
+log_notice(const char *msg)
 {
     log_msg(msg);
 }
@@ -96,7 +99,8 @@ log_notice_with_addr(const char *fmt, const struct sockaddr_storage *addr)
     }
 }
 
-void log_debug(const char *msg)
+void
+log_debug(const char *msg)
 {
     log_msg(msg);
 }
@@ -268,7 +272,8 @@ typedef struct echo_io
  * Return 0 if successful, otherwise -1, in which case the error is
  * logged, and the error code is left in errno.
  */
-int set_nonblocking(int fd)
+int
+set_nonblocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) {
@@ -297,7 +302,8 @@ stop_echo_watcher(EV_P_ echo_io *w)
     free(w);
 }
 
-void echo_cb(EV_P_ ev_io *w_, int revents)
+void
+echo_cb(EV_P_ ev_io *w_, int revents)
 {
     log_debug("echo_cb called");
 
@@ -368,7 +374,8 @@ void echo_cb(EV_P_ ev_io *w_, int revents)
     }
 }
 
-echo_io *make_watcher(int wfd)
+echo_io *
+make_watcher(int wfd)
 {
     if (set_nonblocking(wfd) == -1)
         return 0;
@@ -381,7 +388,8 @@ echo_io *make_watcher(int wfd)
     return watcher;
 }
 
-void listen_cb(EV_P_ ev_io *w, int revents)
+void
+listen_cb(EV_P_ ev_io *w, int revents)
 {
     log_debug("listen_cb called");
 
@@ -436,7 +444,8 @@ void listen_cb(EV_P_ ev_io *w, int revents)
  * which case the error is logged, the error code is left in errno,
  * and -1 is returned.
  */
-int listen_on(const struct sockaddr *addr, socklen_t addr_len)
+int
+listen_on(const struct sockaddr *addr, socklen_t addr_len)
 {
     int fd = socket(addr->sa_family, SOCK_STREAM, 0);
     if (fd == -1) {
@@ -465,7 +474,8 @@ int listen_on(const struct sockaddr *addr, socklen_t addr_len)
     return -1;
 }
 
-ev_io *make_listener(const struct sockaddr *addr, socklen_t addr_len)
+ev_io *
+make_listener(const struct sockaddr *addr, socklen_t addr_len)
 {
     int listen_fd = listen_on(addr, addr_len);
     if (listen_fd == -1)
@@ -479,7 +489,8 @@ ev_io *make_listener(const struct sockaddr *addr, socklen_t addr_len)
                      
 const uint16_t port = 7777;
 
-int main(int argc, char *argv[])
+int
+main(int argc, char *argv[])
 {
     /* Ignore SIGPIPE. */
     struct sigaction sa, osa;
