@@ -127,7 +127,7 @@ ringbuf_init(ringbuf_t *rb)
 }
 
 size_t
-ringbuf_size(ringbuf_t *rb)
+ringbuf_capacity(ringbuf_t *rb)
 {
     /* There's always one unused element */
     return MAX_MSG - 1;
@@ -137,15 +137,27 @@ size_t
 ringbuf_bytes_free(ringbuf_t *rb)
 {
     if (rb->head >= rb->tail)
-        return ringbuf_size(rb) - (rb->head - rb->tail);
+        return ringbuf_capacity(rb) - (rb->head - rb->tail);
     else
         return rb->tail - rb->head - 1;
+}
+
+size_t
+ringbuf_bytes_used(ringbuf_t *rb)
+{
+    return ringbuf_capacity(rb) - ringbuf_bytes_free(rb);
 }
 
 bool
 ringbuf_full(ringbuf_t *rb)
 {
     return ringbuf_bytes_free(rb) == 0;
+}
+
+bool
+ringbuf_empty(ringbuf_t *rb)
+{
+    return ringbuf_bytes_free(rb) == ringbuf_capacity(rb);
 }
 
 char *
@@ -209,6 +221,41 @@ ringbuf_read(int fd, ringbuf_t *rb, size_t count)
     return n;
 }
 
+/*
+ * This function calls write(2) and returns its value. It will only
+ * call write(2) once, and may return a short count. If you get a
+ * short count and want to keep writing to the file descriptor, simply
+ * call the function again.
+ *
+ * The primary purpose of this function is to properly handle the case
+ * where the ring buffer must wrap around the end of the allocated
+ * contiguous buffer space.
+ *
+ * This function will not allow the ring buffer to underflow. If the
+ * user requests to write more bytes than are currently used in the
+ * ring buffer, the function will return 0.
+ */
+ssize_t
+ringbuf_write(int fd, ringbuf_t *rb, size_t count)
+{
+    if (count > ringbuf_bytes_used(rb))
+        return 0;
+
+    char *bufend = rb->buf + MAX_MSG;
+    count = MIN(bufend - rb->tail, count);
+    ssize_t n = write(fd, (const void *) rb->tail, count);
+    if (n > 0) {
+        assert(rb->tail + n <= bufend);
+        rb->tail += n;
+
+        /* wrap? */
+        if (rb->tail == bufend)
+            rb->tail = rb->buf;
+    }
+
+    return n;
+}
+
 typedef struct echo_io
 {
     ev_io io;
@@ -250,32 +297,75 @@ stop_echo_watcher(EV_P_ echo_io *w)
     free(w);
 }
 
-void read_cb(EV_P_ ev_io *w_, int revents)
+void echo_cb(EV_P_ ev_io *w_, int revents)
 {
-    log_debug("read_cb called");
+    log_debug("echo_cb called");
 
     echo_io *w = (echo_io *) w_;
-    while (ringbuf_bytes_free(&w->rb)) {
-        ssize_t n = ringbuf_read(w->io.fd, &w->rb, ringbuf_bytes_free(&w->rb));
-        if (n == 0) {
-            /* eof */
-            stop_echo_watcher(EV_A_ w);
-            return;
+
+    if (revents & EV_WRITE) {
+        log_debug("echo_cb write event");
+        while (!ringbuf_empty(&w->rb)) {
+            ssize_t n = ringbuf_write(w->io.fd,
+                                      &w->rb,
+                                      ringbuf_bytes_used(&w->rb));
+            if (n == -1) {
+                if ((errno == EAGAIN) ||
+                    (errno == EWOULDBLOCK) ||
+                    (errno == EINTR))
+                    break;
+                else {
+                    log_err("write");
+                    stop_echo_watcher(EV_A_ w);
+                    return;
+                }
+            }
         }
-        else if (n == -1) {
-            if ((errno == EAGAIN) || (errno == EWOULDBLOCK) || (errno == EINTR))
-                return;  /* no more data for now */
-            else {
-                log_err("read");
+        if (ringbuf_empty(&w->rb)) {
+            ev_io_stop(EV_A_ &w->io);
+            ev_io_init(&w->io, echo_cb, w->io.fd, EV_READ);
+            ev_io_start(EV_A_ &w->io);
+        }
+    }
+    
+    if (revents & EV_READ) {
+        log_debug("echo_cb read event");
+        size_t nread = 0;
+        while (ringbuf_bytes_free(&w->rb)) {
+            ssize_t n = ringbuf_read(w->io.fd,
+                                     &w->rb,
+                                     ringbuf_bytes_free(&w->rb));
+            if (n == 0) {
+                /* eof */
                 stop_echo_watcher(EV_A_ w);
                 return;
             }
+            else if (n == -1) {
+                if ((errno == EAGAIN) ||
+                    (errno == EWOULDBLOCK) ||
+                    (errno == EINTR)) {
+                    if (nread) {
+                        ev_io_stop(EV_A_ &w->io);
+                        ev_io_init(&w->io,
+                                   echo_cb,
+                                   w->io.fd,
+                                   EV_READ | EV_WRITE);
+                        ev_io_start(EV_A_ &w->io);
+                    }
+                    return;
+                } else {
+                    log_err("read");
+                    stop_echo_watcher(EV_A_ w);
+                    return;
+                }
+            } else
+                nread += n;
         }
-    }
 
-    /* overflow */
-    log_warn("read buffer full");
-    stop_echo_watcher(EV_A_ w);
+        /* overflow */
+        log_warn("read buffer full");
+        stop_echo_watcher(EV_A_ w);
+    }
 }
 
 echo_io *make_watcher(int wfd)
@@ -286,7 +376,7 @@ echo_io *make_watcher(int wfd)
     echo_io *watcher = malloc(sizeof(echo_io));
     if (watcher) {
         ringbuf_init(&watcher->rb);
-        ev_io_init(&watcher->io, read_cb, wfd, EV_READ);
+        ev_io_init(&watcher->io, echo_cb, wfd, EV_READ);
     }
     return watcher;
 }
