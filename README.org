@@ -6,6 +6,25 @@
 
 * INSTALLING
   1. In the Makefile, uncomment the PLATFORM define for your platform.
+
   2. Set the INCLUDES and LIBS Makefile variables to point to your
      libev install, if it's in a non-standard location.
+
   3. make
+
+* LICENSE
+  The code is licensed under the MIT license.
+
+* BUGS/LIMITATIONS
+  - The server always binds to the wildcard addresses (IPv4 and IPv6)
+    on port 7777. There's currently no way to change this other than
+    by hacking the source.
+
+  - The server uses a per-connection ring buffer to prevent clients
+    from DOSing the host (e.g., by writing an endless stream of bytes
+    to the server without ever reading any of them back). The ring
+    buffer capacity is 4095 bytes, so the client cannot have more than
+    4095 bytes outstanding to be read from the server, nor can it
+    write a single line greater than 4095 bytes. If the client exceeds
+    its buffer size, the server will unceremoniously close the
+    connection.
