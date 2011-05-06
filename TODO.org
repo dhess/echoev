@@ -1,4 +1,6 @@
 
+* Clean up warnings on GNU/Linux gcc.
+
 * Only echo back whole records at a time (delimited by '\n').
 
 * Tunable logging (via command-line switches).
