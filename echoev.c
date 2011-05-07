@@ -308,7 +308,7 @@ stop_echo_watcher(EV_P_ echo_io *w)
 }
 
 void
-reset_echo_watcher(EV_P_ echo_io *w, int revents);
+reset_echo_watcher(EV_P_ ev_io *w, int revents);
 
 void
 echo_cb(EV_P_ ev_io *w_, int revents)
@@ -336,7 +336,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
             }
         }
         if (ringbuf_empty(&w->rb))
-            reset_echo_watcher(EV_A_ w, EV_READ);
+            reset_echo_watcher(EV_A_ &w->io, EV_READ);
     }
     
     if (revents & EV_READ) {
@@ -356,7 +356,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     (errno == EWOULDBLOCK) ||
                     (errno == EINTR)) {
                     if (nread)
-                        reset_echo_watcher(EV_A_ w, EV_READ | EV_WRITE);
+                        reset_echo_watcher(EV_A_ &w->io, EV_READ | EV_WRITE);
                     return;
                 } else {
                     log_err("read");
@@ -374,11 +374,11 @@ echo_cb(EV_P_ ev_io *w_, int revents)
 }
 
 void
-reset_echo_watcher(EV_P_ echo_io *w, int revents)
+reset_echo_watcher(EV_P_ ev_io *w, int revents)
 {
-    ev_io_stop(EV_A_ &w->io);
-    ev_io_init(&w->io, echo_cb, w->io.fd, revents);
-    ev_io_start(EV_A_ &w->io);
+    ev_io_stop(EV_A_ w);
+    ev_io_init(w, echo_cb, w->fd, revents);
+    ev_io_start(EV_A_ w);
 }
 
 echo_io *
