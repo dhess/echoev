@@ -44,6 +44,8 @@
 #include <assert.h>
 #include <ev.h>
 
+const char *version = "0.9";
+
 /*
  * An address family-agnostic wrapper around inet_ntop. dst is the
  * character string to which the presentation format string will be
@@ -505,19 +507,31 @@ usage(const char *name)
     printf("usage: %s [OPTIONS]\n\n", name);
     printf("Options:\n");
     printf("  -h, --help       Show this message and exit\n");
+    printf("  -V, --version    Print the program version and exit\n");
+}
+
+void
+print_version(const char *name)
+{
+    printf("%s version %s\n", name, version);
 }
 
 int
 main(int argc, char *argv[])
 {
     static struct option longopts[] = {
-        { "help", no_argument, 0, 'h' },
-        { 0,      0,           0, 0   }
+        { "help",    no_argument, 0, 'h' },
+        { "version", no_argument, 0, 'V' },
+        { 0,         0,           0, 0   }
     };
 
     int ch;
-    while ((ch = getopt_long(argc, argv, "h", longopts, 0)) != -1) {
+    while ((ch = getopt_long(argc, argv, "hV", longopts, 0)) != -1) {
         switch (ch) {
+        case 'V':
+            print_version(basename(argv[0]));
+            exit(0);
+            break;
         case 'h':
         default:
             usage(basename(argv[0]));
