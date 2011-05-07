@@ -137,6 +137,12 @@ ringbuf_capacity(ringbuf_t *rb)
     return MAX_MSG - 1;
 }
 
+const char *
+ringbuf_end(ringbuf_t *rb)
+{
+    return rb->buf + MAX_MSG;
+}
+
 size_t
 ringbuf_bytes_free(ringbuf_t *rb)
 {
@@ -198,7 +204,7 @@ ringbuf_head(ringbuf_t *rb)
 ssize_t
 ringbuf_read(int fd, ringbuf_t *rb, size_t count)
 {
-    char *bufend = rb->buf + MAX_MSG;
+    const char *bufend = ringbuf_end(rb);
     size_t nfree = ringbuf_bytes_free(rb);
 
     /* don't read beyond the end of the buffer */
@@ -245,7 +251,7 @@ ringbuf_write(int fd, ringbuf_t *rb, size_t count)
     if (count > ringbuf_bytes_used(rb))
         return 0;
 
-    char *bufend = rb->buf + MAX_MSG;
+    const char *bufend = ringbuf_end(rb);
     count = MIN(bufend - rb->tail, count);
     ssize_t n = write(fd, (const void *) rb->tail, count);
     if (n > 0) {
