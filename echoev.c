@@ -38,6 +38,7 @@
 #include <sys/socket.h>
 #include <ctype.h>
 #include <signal.h>
+#include <sys/param.h>
 #include <assert.h>
 #include <ev.h>
 
@@ -198,8 +199,6 @@ ringbuf_head(ringbuf_t *rb)
  * stream. When an overflow occurs, the state of the ring buffer is
  * guaranteed to be consistent, including the head and tail pointers.
  */
-
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
 
 ssize_t
 ringbuf_read(int fd, ringbuf_t *rb, size_t count)
