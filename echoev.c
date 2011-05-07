@@ -39,6 +39,8 @@
 #include <ctype.h>
 #include <signal.h>
 #include <sys/param.h>
+#include <getopt.h>
+#include <libgen.h>
 #include <assert.h>
 #include <ev.h>
 
@@ -497,9 +499,32 @@ make_listener(const struct sockaddr *addr, socklen_t addr_len)
                      
 const uint16_t port = 7777;
 
+void
+usage(const char *name)
+{
+    printf("usage: %s [OPTIONS]\n\n", name);
+    printf("Options:\n");
+    printf("  -h, --help       Show this message and exit\n");
+}
+
 int
 main(int argc, char *argv[])
 {
+    static struct option longopts[] = {
+        { "help", no_argument, 0, 'h' },
+        { 0,      0,           0, 0   }
+    };
+
+    int ch;
+    while ((ch = getopt_long(argc, argv, "h", longopts, 0)) != -1) {
+        switch (ch) {
+        case 'h':
+        default:
+            usage(basename(argv[0]));
+            exit(0);
+        }
+    }
+    
     /* Ignore SIGPIPE. */
     struct sigaction sa, osa;
     sa.sa_handler = SIG_IGN;
