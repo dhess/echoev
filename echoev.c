@@ -390,7 +390,8 @@ make_echo_watcher(int wfd)
     echo_io *watcher = malloc(sizeof(echo_io));
     if (watcher) {
         ringbuf_init(&watcher->rb);
-        ev_io_init(&watcher->io, echo_cb, wfd, EV_READ);
+        ev_io *io = &watcher->io;
+        ev_io_init(io, echo_cb, wfd, EV_READ);
     }
     return watcher;
 }
