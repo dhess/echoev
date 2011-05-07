@@ -134,13 +134,13 @@ size_t
 ringbuf_capacity(ringbuf_t *rb)
 {
     /* There's always one unused element */
-    return MAX_MSG - 1;
+    return sizeof(rb->buf) - 1;
 }
 
 const char *
 ringbuf_end(ringbuf_t *rb)
 {
-    return rb->buf + MAX_MSG;
+    return rb->buf + sizeof(rb->buf);
 }
 
 size_t
