@@ -383,7 +383,7 @@ reset_echo_watcher(EV_P_ echo_io *w, int revents)
 }
 
 echo_io *
-make_watcher(int wfd)
+make_echo_watcher(int wfd)
 {
     if (set_nonblocking(wfd) == -1)
         return 0;
@@ -435,9 +435,9 @@ listen_cb(EV_P_ ev_io *w, int revents)
         }
 
         log_notice_with_addr("accepted connection from %s", &addr);
-        echo_io *watcher = make_watcher(fd);
+        echo_io *watcher = make_echo_watcher(fd);
         if (!watcher) {
-            log_err("make_watcher");
+            log_err("make_echo_watcher");
             close(fd);
         } else
             ev_io_start(EV_A_ &watcher->io);
