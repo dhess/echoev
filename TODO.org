@@ -1,6 +1,4 @@
 
-* Clean up warnings on GNU/Linux gcc.
-
 * Only echo back whole records at a time (delimited by '\n').
 
 * Double-check all "funky" cases listed in ev man page and in UNPv1.
