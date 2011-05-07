@@ -309,6 +309,9 @@ stop_echo_watcher(EV_P_ echo_io *w)
 }
 
 void
+reset_echo_watcher(EV_P_ echo_io *w, int revents);
+
+void
 echo_cb(EV_P_ ev_io *w_, int revents)
 {
     log_debug("echo_cb called");
@@ -333,11 +336,8 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 }
             }
         }
-        if (ringbuf_empty(&w->rb)) {
-            ev_io_stop(EV_A_ &w->io);
-            ev_io_init(&w->io, echo_cb, w->io.fd, EV_READ);
-            ev_io_start(EV_A_ &w->io);
-        }
+        if (ringbuf_empty(&w->rb))
+            reset_echo_watcher(EV_A_ w, EV_READ);
     }
     
     if (revents & EV_READ) {
@@ -356,14 +356,8 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 if ((errno == EAGAIN) ||
                     (errno == EWOULDBLOCK) ||
                     (errno == EINTR)) {
-                    if (nread) {
-                        ev_io_stop(EV_A_ &w->io);
-                        ev_io_init(&w->io,
-                                   echo_cb,
-                                   w->io.fd,
-                                   EV_READ | EV_WRITE);
-                        ev_io_start(EV_A_ &w->io);
-                    }
+                    if (nread)
+                        reset_echo_watcher(EV_A_ w, EV_READ | EV_WRITE);
                     return;
                 } else {
                     log_err("read");
@@ -378,6 +372,14 @@ echo_cb(EV_P_ ev_io *w_, int revents)
         log_warn("read buffer full");
         stop_echo_watcher(EV_A_ w);
     }
+}
+
+void
+reset_echo_watcher(EV_P_ echo_io *w, int revents)
+{
+    ev_io_stop(EV_A_ &w->io);
+    ev_io_init(&w->io, echo_cb, w->io.fd, revents);
+    ev_io_start(EV_A_ &w->io);
 }
 
 echo_io *
