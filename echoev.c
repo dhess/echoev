@@ -36,6 +36,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <netdb.h>
 #include <ctype.h>
 #include <signal.h>
 #include <sys/param.h>
@@ -499,13 +500,16 @@ make_listener(const struct sockaddr *addr, socklen_t addr_len)
     return watcher;
 }
                      
-const uint16_t port = 7777;
+const char *default_portstr = "7777";
 
 void
 usage(const char *name)
 {
     printf("usage: %s [OPTIONS]\n\n", name);
     printf("Options:\n");
+    printf("  -p, --port       Port number to listen on [0-65535].\n");
+    printf("                   The default is 7777. Service names are\n");
+    printf("                   also acceptable.\n");
     printf("  -h, --help       Show this message and exit\n");
     printf("  -V, --version    Print the program version and exit\n");
 }
@@ -520,17 +524,26 @@ int
 main(int argc, char *argv[])
 {
     static struct option longopts[] = {
-        { "help",    no_argument, 0, 'h' },
-        { "version", no_argument, 0, 'V' },
-        { 0,         0,           0, 0   }
+        { "help",    no_argument,       0, 'h' },
+        { "version", no_argument,       0, 'V' },
+        { "port",    required_argument, 0, 'p' },
+        { 0,         0,                 0,  0  }
     };
 
+    char *portstr = 0;
     int ch;
-    while ((ch = getopt_long(argc, argv, "hV", longopts, 0)) != -1) {
+    while ((ch = getopt_long(argc, argv, "hVp:", longopts, 0)) != -1) {
         switch (ch) {
         case 'V':
             print_version(basename(argv[0]));
             exit(0);
+            break;
+        case 'p':
+            portstr = strdup(optarg);
+            if (!portstr) {
+                log_err("strdup");
+                exit(errno);
+            }
             break;
         case 'h':
         default:
@@ -538,7 +551,7 @@ main(int argc, char *argv[])
             exit(0);
         }
     }
-    
+
     /* Ignore SIGPIPE. */
     struct sigaction sa, osa;
     sa.sa_handler = SIG_IGN;
@@ -566,33 +579,47 @@ main(int argc, char *argv[])
      * OpenBSD simply won't route IPv4 traffic to IPv6 sockets.
      */
 
-    struct sockaddr_in6 saddr6;
-    memset(&saddr6, 0, sizeof(saddr6));
-    saddr6.sin6_family = AF_INET6;
-    saddr6.sin6_addr = in6addr_any;
-    saddr6.sin6_port = htons(port);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_family = AF_INET6;
+    hints.ai_flags = AI_PASSIVE;
 
-    ev_io *listen6_watcher = make_listener((const struct sockaddr *)&saddr6,
-                                           sizeof(saddr6));
+    int err = getaddrinfo(0, portstr ? portstr : default_portstr, &hints, &res);
+    if (err) {
+        log_err(gai_strerror(err));
+        exit(err);
+    }
+    assert(res);
+    assert(!res->ai_next);
+    ev_io *listen6_watcher = make_listener(res->ai_addr, res->ai_addrlen);
     if (listen6_watcher)
         ev_io_start(loop, listen6_watcher);
     else
         exit(errno);
+    freeaddrinfo(res);
 
 #ifndef ECHOEV_PLATFORM_LINUX
-    struct sockaddr_in saddr;
-    memset(&saddr, 0, sizeof(saddr));
-    saddr.sin_family = AF_INET;
-    saddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    saddr.sin_port = htons(port);
-
-    ev_io *listen_watcher = make_listener((const struct sockaddr *)&saddr,
-                                          sizeof(saddr));
+    hints.ai_family = AF_INET;
+    err = getaddrinfo(0, portstr ? portstr : default_portstr, &hints, &res);
+    if (err) {
+        log_err(gai_strerror(err));
+        exit(err);
+    }
+    assert(res);
+    assert(!res->ai_next);
+    ev_io *listen_watcher = make_listener(res->ai_addr, res->ai_addrlen);
     if (listen_watcher)
         ev_io_start(loop, listen_watcher);
     else
         exit(errno);
+    freeaddrinfo(res);
 #endif
+
+    /* Cleanup before entering ev_run loop */
+    if (portstr)
+        free(portstr);
     
     log_debug("entering ev_run");
     ev_run(loop, 0);

@@ -5,8 +5,6 @@
 
 * Tunable logging (via command-line switches).
 
-* Listen on a specified port number.
-
 * Listen on a specified host address.
 
 * Write a client.
