@@ -7,4 +7,9 @@
 
 * Listen on a specified host address.
 
+* Add %m support and auto-newline to stderr_syslog.
+** maybe escape \n, \t and other control chars?
+*** might be a Mac OS X-only thing? 
+    OpenBSD and Linux syslog(3) man pages don't mention it.
+
 * Write a client.
