@@ -45,7 +45,12 @@
 #include <assert.h>
 #include <ev.h>
 
+#include "logging.h"
+
 const char *version = "0.9";
+
+static syslog_fun log;
+static setlogmask_fun logmask;
 
 /*
  * An address family-agnostic wrapper around inet_ntop. dst is the
@@ -66,49 +71,15 @@ inet_ntop_any(const struct sockaddr_storage *addr, char *dst, socklen_t size)
     return inet_ntop(addr->ss_family, src, dst, size);
 }
 
-#define MAX_LOG 256
-
-void
-log_msg(const char *msg)
-{
-    puts(msg);
-}
-
-void
-log_err(const char *errmsg)
-{
-    perror(errmsg);
-}
-
-void
-log_warn(const char *msg)
-{
-    log_msg(msg);
-}
-
-void
-log_notice(const char *msg)
-{
-    log_msg(msg);
-}
-
 static void
 log_notice_with_addr(const char *fmt, const struct sockaddr_storage *addr)
 {
     char ip[INET6_ADDRSTRLEN];
     if (!inet_ntop_any(addr, ip, INET6_ADDRSTRLEN))
-        log_err("log_notice_with_addr inet_ntop");
+        log(LOG_ERR, "log_notice_with_addr inet_ntop: %s", strerror(errno));
     else {
-        char msg[MAX_LOG];
-        snprintf(msg, sizeof(msg), fmt, ip);
-        log_notice(msg);
+        log(LOG_NOTICE, fmt, ip);
     }
-}
-
-void
-log_debug(const char *msg)
-{
-    log_msg(msg);
 }
 
 #define MAX_MSG 4096
@@ -287,12 +258,12 @@ set_nonblocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) {
-        log_err("fcntl");
+        log(LOG_ERR, "fcntl: %s", strerror(errno));
         return -1;
     }
     flags |= O_NONBLOCK;
     if (fcntl(fd, F_SETFL, flags) == -1) {
-        log_err("fcntl");
+        log(LOG_ERR, "fcntl: %s", strerror(errno));
         return -1;
     }
     return 0;
@@ -304,7 +275,7 @@ stop_echo_watcher(EV_P_ echo_io *w)
     struct sockaddr_storage addr;
     socklen_t addr_len = sizeof(addr);
     if (getpeername(w->io.fd, (struct sockaddr *) &addr, &addr_len) == -1)
-        log_err("stop_echo_watcher getpeername");
+        log(LOG_ERR, "stop_echo_watcher getpeername: %s", strerror(errno));
     else
         log_notice_with_addr("closed connection from %s", &addr);
     ev_io_stop(EV_A_ &w->io);
@@ -318,12 +289,12 @@ reset_echo_watcher(EV_P_ ev_io *w, int revents);
 void
 echo_cb(EV_P_ ev_io *w_, int revents)
 {
-    log_debug("echo_cb called");
+    log(LOG_DEBUG, "echo_cb called");
 
     echo_io *w = (echo_io *) w_;
 
     if (revents & EV_WRITE) {
-        log_debug("echo_cb write event");
+        log(LOG_DEBUG, "echo_cb write event");
         while (!ringbuf_empty(&w->rb)) {
             ssize_t n = ringbuf_write(w->io.fd,
                                       &w->rb,
@@ -334,7 +305,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     (errno == EINTR))
                     break;
                 else {
-                    log_err("write");
+                    log(LOG_ERR, "write: %s", strerror(errno));
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
@@ -345,7 +316,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
     }
     
     if (revents & EV_READ) {
-        log_debug("echo_cb read event");
+        log(LOG_DEBUG, "echo_cb read event");
         size_t nread = 0;
         while (ringbuf_bytes_free(&w->rb)) {
             ssize_t n = ringbuf_read(w->io.fd,
@@ -364,7 +335,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                         reset_echo_watcher(EV_A_ &w->io, EV_READ | EV_WRITE);
                     return;
                 } else {
-                    log_err("read");
+                    log(LOG_ERR, "read: %s", strerror(errno));
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
@@ -373,7 +344,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
         }
 
         /* overflow */
-        log_warn("read buffer full");
+        log(LOG_WARNING, "read buffer full");
         stop_echo_watcher(EV_A_ w);
     }
 }
@@ -404,7 +375,7 @@ make_echo_watcher(int wfd)
 void
 listen_cb(EV_P_ ev_io *w, int revents)
 {
-    log_debug("listen_cb called");
+    log(LOG_DEBUG, "listen_cb called");
 
     /*
      * libev recommends calling accept() in a loop for best
@@ -434,7 +405,7 @@ listen_cb(EV_P_ ev_io *w, int revents)
                 (errno == EINTR))
                 break;
             else {
-                log_err("accept");
+                log(LOG_ERR, "accept: %s", strerror(errno));
                 break;
             }
         }
@@ -442,7 +413,7 @@ listen_cb(EV_P_ ev_io *w, int revents)
         log_notice_with_addr("accepted connection from %s", &addr);
         echo_io *watcher = make_echo_watcher(fd);
         if (!watcher) {
-            log_err("make_echo_watcher");
+            log(LOG_ERR, "make_echo_watcher: %s", strerror(errno));
             close(fd);
         } else
             ev_io_start(EV_A_ &watcher->io);
@@ -462,22 +433,22 @@ listen_on(const struct sockaddr *addr, socklen_t addr_len)
 {
     int fd = socket(addr->sa_family, SOCK_STREAM, 0);
     if (fd == -1) {
-        log_err("socket");
+        log(LOG_ERR, "socket: %s", strerror(errno));
         return -1;
     }
     if (set_nonblocking(fd) == -1)
         goto err;
     const int on = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) {
-        log_err("setsockopt");
+        log(LOG_ERR, "setsockopt: %s", strerror(errno));
         return -1;
     }
     if (bind(fd, addr, addr_len) == -1) {
-        log_err("bind");
+        log(LOG_ERR, "bind: %s", strerror(errno));
         goto err;
     }
     if (listen(fd, 8) == -1) {
-        log_err("listen");
+        log(LOG_ERR, "listen: %s", strerror(errno));
         goto err;
     }
     return fd;
@@ -541,7 +512,7 @@ main(int argc, char *argv[])
         case 'p':
             portstr = strdup(optarg);
             if (!portstr) {
-                log_err("strdup");
+                perror("strdup");
                 exit(errno);
             }
             break;
@@ -552,13 +523,16 @@ main(int argc, char *argv[])
         }
     }
 
+    get_stderr_logger(&log, 0, &logmask);
+    logmask(LOG_UPTO(LOG_NOTICE));
+    
     /* Ignore SIGPIPE. */
     struct sigaction sa, osa;
     sa.sa_handler = SIG_IGN;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     if (sigaction(SIGPIPE, &sa, &osa) == -1) {
-        log_err("sigaction");
+        log(LOG_ERR, "sigaction: %s", strerror(errno));
         exit(errno);
     }
     
@@ -588,7 +562,7 @@ main(int argc, char *argv[])
 
     int err = getaddrinfo(0, portstr ? portstr : default_portstr, &hints, &res);
     if (err) {
-        log_err(gai_strerror(err));
+        log(LOG_ERR, "%s", gai_strerror(err));
         exit(err);
     }
     assert(res);
@@ -604,7 +578,7 @@ main(int argc, char *argv[])
     hints.ai_family = AF_INET;
     err = getaddrinfo(0, portstr ? portstr : default_portstr, &hints, &res);
     if (err) {
-        log_err(gai_strerror(err));
+        log(LOG_ERR, "%s", gai_strerror(err));
         exit(err);
     }
     assert(res);
@@ -621,9 +595,9 @@ main(int argc, char *argv[])
     if (portstr)
         free(portstr);
     
-    log_debug("entering ev_run");
+    log(LOG_DEBUG, "entering ev_run");
     ev_run(loop, 0);
 
-    log_debug("ev_run exited");
+    log(LOG_DEBUG, "ev_run exited");
     return 0;
 }
