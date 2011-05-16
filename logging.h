@@ -79,9 +79,6 @@ void get_syslog_logger(syslog_fun *logger,
  * meaning for stderr logging, and are therefore ignored by these
  * functions.
  *
- * This stderr logger does not support the special syslog %m format
- * character sequence. Use strerror(3) with %s, instead.
- * 
  * Like its syslog counterpart, the default stderr log mask permits
  * all log priorities to be logged.
  *

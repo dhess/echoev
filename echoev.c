@@ -76,7 +76,7 @@ log_notice_with_addr(const char *fmt, const struct sockaddr_storage *addr)
 {
     char ip[INET6_ADDRSTRLEN];
     if (!inet_ntop_any(addr, ip, INET6_ADDRSTRLEN))
-        log(LOG_ERR, "log_notice_with_addr inet_ntop: %s", strerror(errno));
+        log(LOG_ERR, "log_notice_with_addr inet_ntop: %m");
     else {
         log(LOG_NOTICE, fmt, ip);
     }
@@ -258,12 +258,12 @@ set_nonblocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) {
-        log(LOG_ERR, "fcntl: %s", strerror(errno));
+        log(LOG_ERR, "fcntl: %m");
         return -1;
     }
     flags |= O_NONBLOCK;
     if (fcntl(fd, F_SETFL, flags) == -1) {
-        log(LOG_ERR, "fcntl: %s", strerror(errno));
+        log(LOG_ERR, "fcntl: %m");
         return -1;
     }
     return 0;
@@ -275,7 +275,7 @@ stop_echo_watcher(EV_P_ echo_io *w)
     struct sockaddr_storage addr;
     socklen_t addr_len = sizeof(addr);
     if (getpeername(w->io.fd, (struct sockaddr *) &addr, &addr_len) == -1)
-        log(LOG_ERR, "stop_echo_watcher getpeername: %s", strerror(errno));
+        log(LOG_ERR, "stop_echo_watcher getpeername: %m");
     else
         log_notice_with_addr("closed connection from %s", &addr);
     ev_io_stop(EV_A_ &w->io);
@@ -305,7 +305,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     (errno == EINTR))
                     break;
                 else {
-                    log(LOG_ERR, "write: %s", strerror(errno));
+                    log(LOG_ERR, "write: %m");
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
@@ -335,7 +335,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                         reset_echo_watcher(EV_A_ &w->io, EV_READ | EV_WRITE);
                     return;
                 } else {
-                    log(LOG_ERR, "read: %s", strerror(errno));
+                    log(LOG_ERR, "read: %m");
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
@@ -405,7 +405,7 @@ listen_cb(EV_P_ ev_io *w, int revents)
                 (errno == EINTR))
                 break;
             else {
-                log(LOG_ERR, "accept: %s", strerror(errno));
+                log(LOG_ERR, "accept: %m");
                 break;
             }
         }
@@ -413,7 +413,7 @@ listen_cb(EV_P_ ev_io *w, int revents)
         log_notice_with_addr("accepted connection from %s", &addr);
         echo_io *watcher = make_echo_watcher(fd);
         if (!watcher) {
-            log(LOG_ERR, "make_echo_watcher: %s", strerror(errno));
+            log(LOG_ERR, "make_echo_watcher: %m");
             close(fd);
         } else
             ev_io_start(EV_A_ &watcher->io);
@@ -433,22 +433,22 @@ listen_on(const struct sockaddr *addr, socklen_t addr_len)
 {
     int fd = socket(addr->sa_family, SOCK_STREAM, 0);
     if (fd == -1) {
-        log(LOG_ERR, "socket: %s", strerror(errno));
+        log(LOG_ERR, "socket: %m");
         return -1;
     }
     if (set_nonblocking(fd) == -1)
         goto err;
     const int on = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) {
-        log(LOG_ERR, "setsockopt: %s", strerror(errno));
+        log(LOG_ERR, "setsockopt: %m");
         return -1;
     }
     if (bind(fd, addr, addr_len) == -1) {
-        log(LOG_ERR, "bind: %s", strerror(errno));
+        log(LOG_ERR, "bind: %m");
         goto err;
     }
     if (listen(fd, 8) == -1) {
-        log(LOG_ERR, "listen: %s", strerror(errno));
+        log(LOG_ERR, "listen: %m");
         goto err;
     }
     return fd;
@@ -532,7 +532,7 @@ main(int argc, char *argv[])
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     if (sigaction(SIGPIPE, &sa, &osa) == -1) {
-        log(LOG_ERR, "sigaction: %s", strerror(errno));
+        log(LOG_ERR, "sigaction: %m");
         exit(errno);
     }
     
