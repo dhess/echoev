@@ -481,6 +481,9 @@ usage(const char *name)
     printf("  -p, --port       Port number to listen on [0-65535].\n");
     printf("                   The default is 7777. Service names are\n");
     printf("                   also acceptable.\n");
+    printf("  -i, --interface  Interface to listen on, specified by IP\n");
+    printf("                   address. May be specified multiple times.\n");
+    printf("                   The default is all interfaces.\n");
     printf("  -l, --loglevel   Set the logging level (0-7, 0 is emergency,\n");
     printf("                   7 is debug). The default is 5 (notice).\n");
     printf("  -h, --help       Show this message and exit\n");
@@ -496,18 +499,26 @@ print_version(const char *name)
 int
 main(int argc, char *argv[])
 {
+    typedef struct ip_list_t {
+        char *addr;
+        int family;
+        struct ip_list_t *next;
+    } ip_list_t;
+    
     static struct option longopts[] = {
-        { "help",     no_argument,       0, 'h' },
-        { "version",  no_argument,       0, 'V' },
-        { "port",     required_argument, 0, 'p' },
-        { "loglevel", required_argument, 0, 'l' },
-        { 0,          0,                 0,  0  }
+        { "help",      no_argument,       0, 'h' },
+        { "version",   no_argument,       0, 'V' },
+        { "port",      required_argument, 0, 'p' },
+        { "loglevel",  required_argument, 0, 'l' },
+        { "interface", required_argument, 0, 'i' },
+        { 0,           0,                 0,  0  }
     };
 
     long loglevel = LOG_NOTICE;
     char *portstr = 0;
+    ip_list_t *ip = 0, *listen_ips = 0;
     int ch;
-    while ((ch = getopt_long(argc, argv, "hVl:p:", longopts, 0)) != -1) {
+    while ((ch = getopt_long(argc, argv, "hVl:p:i:", longopts, 0)) != -1) {
         switch (ch) {
         case 'V':
             print_version(basename(argv[0]));
@@ -528,6 +539,18 @@ main(int argc, char *argv[])
                 exit(errno);
             }
             break;
+        case 'i':
+            if (ip) {
+                ip->next = (ip_list_t *) malloc(sizeof(ip_list_t));
+                ip = ip->next;
+            } else {
+                listen_ips = (ip_list_t *) malloc(sizeof(ip_list_t));
+                ip = listen_ips;
+            }
+            ip->addr = strdup(optarg);
+            ip->family = AF_UNSPEC;
+            ip->next = 0;
+            break;
         case 'h':
         default:
             usage(basename(argv[0]));
@@ -535,6 +558,49 @@ main(int argc, char *argv[])
         }
     }
 
+    /*
+     * If no listen IPs were specified, listen on all interfaces
+     * (i.e., the wildcard address).
+     *
+     * Regarding IPv4 and IPv6 wildcard binds on the same port:
+     *
+     * The Linux kernel maps both IPv4 and IPv6 wildcard binds to the
+     * same local port space, in which case only one family can be
+     * bound to a given port. An IPv6 wildcard bind on a GNU/Linux
+     * system will see both IPv4 and IPv6 traffic.
+     *
+     * BSD-based platforms (e.g., Mac OS X) recommend listening on two
+     * sockets for the same port, one for IPv4 and one for IPv6, when
+     * you want to accept traffic for both transports, especially when
+     * access control (firewalling) is in effect.
+     *
+     * OpenBSD simply won't route IPv4 traffic to IPv6 sockets; on
+     * that platform, an application must bind to both of the IPv4 and
+     * IPv6 wildcard addresses to receive both types of traffic.
+     */
+    
+    if (!listen_ips) {
+        ip = (ip_list_t *) malloc(sizeof(ip_list_t));
+        if (!ip) {
+            perror("malloc");
+            exit(errno);
+        }
+        listen_ips = ip;
+        ip->addr = 0;
+        ip->family = AF_INET6;
+#ifndef ECHOEV_PLATFORM_LINUX
+        ip->next = (ip_list_t *) malloc(sizeof(ip_list_t));
+        if (!ip->next) {
+            perror("malloc");
+            exit(errno);
+        }
+        ip = ip->next;
+        ip->addr = 0;
+        ip->family = AF_INET;
+#endif
+        ip->next = 0;
+    }
+    
     get_stderr_logger(&log, 0, &logmask);
     logmask(LOG_UPTO(loglevel));
     
@@ -550,62 +616,41 @@ main(int argc, char *argv[])
     
     struct ev_loop *loop = EV_DEFAULT;
 
-    /*
-     * Regarding IPv4 and IPv6 wildcard binds on the same port:
-     *
-     * The Linux kernel maps both IPv4 and IPv6 wildcard binds to the
-     * same local port space, in which case only one family can be
-     * bound to a given port. An IPv6 wildcard bind will see both IPv4
-     * and IPv6 traffic. BSD-based platforms (e.g., Mac OS X)
-     * recommend listening on two sockets for the same port, one for
-     * IPv4 and one for IPv6, when you want to accept traffic for both
-     * transports, especially when access control (firewalling) is in
-     * effect.
-     *
-     * OpenBSD simply won't route IPv4 traffic to IPv6 sockets.
-     */
-
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    hints.ai_family = AF_INET6;
-    hints.ai_flags = AI_PASSIVE;
+    hints.ai_flags = AI_PASSIVE | AI_NUMERICHOST;
 
-    int err = getaddrinfo(0, portstr ? portstr : default_portstr, &hints, &res);
-    if (err) {
-        log(LOG_ERR, "%s", gai_strerror(err));
-        exit(err);
+    for (ip = listen_ips; ip != 0; ip = ip->next) {
+        hints.ai_family = ip->family;
+        int err = getaddrinfo(ip->addr,
+                              portstr ? portstr : default_portstr,
+                              &hints,
+                              &res);
+        if (err) {
+            log(LOG_ERR, "%s", gai_strerror(err));
+            exit(err);
+        }
+        assert(!res->ai_next);
+        ev_io *listen_watcher = make_listener(res->ai_addr, res->ai_addrlen);
+        if (listen_watcher)
+            ev_io_start(loop, listen_watcher);
+        else
+            exit(errno);
+        freeaddrinfo(res);
     }
-    assert(res);
-    assert(!res->ai_next);
-    ev_io *listen6_watcher = make_listener(res->ai_addr, res->ai_addrlen);
-    if (listen6_watcher)
-        ev_io_start(loop, listen6_watcher);
-    else
-        exit(errno);
-    freeaddrinfo(res);
 
-#ifndef ECHOEV_PLATFORM_LINUX
-    hints.ai_family = AF_INET;
-    err = getaddrinfo(0, portstr ? portstr : default_portstr, &hints, &res);
-    if (err) {
-        log(LOG_ERR, "%s", gai_strerror(err));
-        exit(err);
-    }
-    assert(res);
-    assert(!res->ai_next);
-    ev_io *listen_watcher = make_listener(res->ai_addr, res->ai_addrlen);
-    if (listen_watcher)
-        ev_io_start(loop, listen_watcher);
-    else
-        exit(errno);
-    freeaddrinfo(res);
-#endif
-
-    /* Cleanup before entering ev_run loop */
+    /* Clean up before entering ev_run loop */
     if (portstr)
         free(portstr);
+    while (listen_ips) {
+        ip = listen_ips;
+        listen_ips = ip->next;
+        free(ip->addr);
+        free(ip);
+    }
+    listen_ips = 0;
     
     log(LOG_DEBUG, "entering ev_run");
     ev_run(loop, 0);

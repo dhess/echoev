@@ -3,6 +3,4 @@
 
 * Double-check all "funky" cases listed in ev man page and in UNPv1.
 
-* Listen on a specified host address.
-
 * Write a client.
