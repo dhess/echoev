@@ -481,6 +481,8 @@ usage(const char *name)
     printf("  -p, --port       Port number to listen on [0-65535].\n");
     printf("                   The default is 7777. Service names are\n");
     printf("                   also acceptable.\n");
+    printf("  -l, --loglevel   Set the logging level (0-7, 0 is emergency,\n");
+    printf("                   7 is debug). The default is 5 (notice).\n");
     printf("  -h, --help       Show this message and exit\n");
     printf("  -V, --version    Print the program version and exit\n");
 }
@@ -495,19 +497,29 @@ int
 main(int argc, char *argv[])
 {
     static struct option longopts[] = {
-        { "help",    no_argument,       0, 'h' },
-        { "version", no_argument,       0, 'V' },
-        { "port",    required_argument, 0, 'p' },
-        { 0,         0,                 0,  0  }
+        { "help",     no_argument,       0, 'h' },
+        { "version",  no_argument,       0, 'V' },
+        { "port",     required_argument, 0, 'p' },
+        { "loglevel", required_argument, 0, 'l' },
+        { 0,          0,                 0,  0  }
     };
 
+    long loglevel = LOG_NOTICE;
     char *portstr = 0;
     int ch;
-    while ((ch = getopt_long(argc, argv, "hVp:", longopts, 0)) != -1) {
+    while ((ch = getopt_long(argc, argv, "hVl:p:", longopts, 0)) != -1) {
         switch (ch) {
         case 'V':
             print_version(basename(argv[0]));
             exit(0);
+            break;
+        case 'l':
+            errno = 0;
+            loglevel = strtol(optarg, 0, 10);
+            if (errno || loglevel < 0 || loglevel > 7) {
+                fprintf(stderr, "Log level must be between 0 and 7, inclusive.\n");
+                exit(errno);
+            }
             break;
         case 'p':
             portstr = strdup(optarg);
@@ -524,7 +536,7 @@ main(int argc, char *argv[])
     }
 
     get_stderr_logger(&log, 0, &logmask);
-    logmask(LOG_UPTO(LOG_NOTICE));
+    logmask(LOG_UPTO(loglevel));
     
     /* Ignore SIGPIPE. */
     struct sigaction sa, osa;
