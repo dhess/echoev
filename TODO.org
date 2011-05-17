@@ -3,4 +3,6 @@
 
 * Double-check all "funky" cases listed in ev man page and in UNPv1.
 
+** ev_io and accept() errors.
+
 * Write a client.
