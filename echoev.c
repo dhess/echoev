@@ -52,34 +52,24 @@ const char *version = "0.9";
 static syslog_fun log;
 static setlogmask_fun logmask;
 
-/*
- * An address family-agnostic wrapper around inet_ntop. dst is the
- * character string to which the presentation format string will be
- * written, and size is the length of that string.
- *
- * Returns a pointer to dst if successful, 0 if not, in which case
- * errno is set.
- */
-const char *
-inet_ntop_any(const struct sockaddr_storage *addr, char *dst, socklen_t size)
-{
-    const void *src;
-    if (addr->ss_family == AF_INET)
-        src = &((const struct sockaddr_in *) addr)->sin_addr;
-    else
-        src = &((const struct sockaddr_in6 *) addr)->sin6_addr;
-    return inet_ntop(addr->ss_family, src, dst, size);
-}
-
 static void
-log_notice_with_addr(const char *fmt, const struct sockaddr_storage *addr)
+log_with_addr(int priority,
+              const char *fmt,
+              const struct sockaddr *addr,
+              socklen_t size)
 {
-    char ip[INET6_ADDRSTRLEN];
-    if (!inet_ntop_any(addr, ip, INET6_ADDRSTRLEN))
-        log(LOG_ERR, "log_notice_with_addr inet_ntop: %m");
-    else {
-        log(LOG_NOTICE, fmt, ip);
-    }
+    char host[NI_MAXHOST];
+    int err = getnameinfo((const struct sockaddr *) addr,
+                          size,
+                          host,
+                          sizeof(host),
+                          0,
+                          0,
+                          NI_NUMERICHOST);
+    if (err)
+        log(LOG_ERR, "log_with_addr getnameinfo: %s", gai_strerror(err));
+    else
+        log(priority, fmt, host);
 }
 
 #define MAX_MSG 4096
@@ -277,7 +267,10 @@ stop_echo_watcher(EV_P_ echo_io *w)
     if (getpeername(w->io.fd, (struct sockaddr *) &addr, &addr_len) == -1)
         log(LOG_ERR, "stop_echo_watcher getpeername: %m");
     else
-        log_notice_with_addr("closed connection from %s", &addr);
+        log_with_addr(LOG_NOTICE,
+                      "closed connection from %s",
+                      (const struct sockaddr *) &addr,
+                      addr_len);
     ev_io_stop(EV_A_ &w->io);
     close(w->io.fd);
     free(w);
@@ -410,7 +403,10 @@ listen_cb(EV_P_ ev_io *w, int revents)
             }
         }
 
-        log_notice_with_addr("accepted connection from %s", &addr);
+        log_with_addr(LOG_NOTICE,
+                      "accepted connection from %s",
+                      (const struct sockaddr *) &addr,
+                      addr_len);
         echo_io *watcher = make_echo_watcher(fd);
         if (!watcher) {
             log(LOG_ERR, "make_echo_watcher: %m");
@@ -634,8 +630,13 @@ main(int argc, char *argv[])
         }
         assert(!res->ai_next);
         ev_io *listen_watcher = make_listener(res->ai_addr, res->ai_addrlen);
-        if (listen_watcher)
+        if (listen_watcher) {
+            log_with_addr(LOG_NOTICE,
+                          "listening on %s",
+                          res->ai_addr,
+                          res->ai_addrlen);
             ev_io_start(loop, listen_watcher);
+        }
         else
             exit(errno);
         freeaddrinfo(res);
