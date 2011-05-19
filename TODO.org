@@ -5,4 +5,6 @@
 
 ** ev_io and accept() errors.
 
+* Timeouts
+
 * Write a client.
