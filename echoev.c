@@ -46,6 +46,7 @@
 #include <ev.h>
 
 #include "logging.h"
+#include "ringbuf.h"
 
 const char *version = "0.9";
 
@@ -70,165 +71,6 @@ log_with_addr(int priority,
         log(LOG_ERR, "log_with_addr getnameinfo: %s", gai_strerror(err));
     else
         log(priority, fmt, host);
-}
-
-#define MAX_MSG 4096
-
-/*
- * Naive ring buffer FIFO implementation, with a sentinel element used
- * to indicate the "full" condition.
- *
- * The ring buffer's head pointer points to the starting location
- * where data should be written when copying data *into* the buffer
- * (e.g., with ringbuf_read). The ring buffer's tail pointer points to
- * the starting location where data should be read when copying data
- * *from* the buffer (e.g., with ringbuf_write).
- */
-
-typedef struct ringbuf_t
-{
-    char *head, *tail;
-    char buf[MAX_MSG];
-} ringbuf_t;
-
-void
-ringbuf_init(ringbuf_t *rb)
-{
-    rb->head = rb->tail = rb->buf;
-}
-
-size_t
-ringbuf_capacity(ringbuf_t *rb)
-{
-    /* There's always one unused element */
-    return sizeof(rb->buf) - 1;
-}
-
-const char *
-ringbuf_end(ringbuf_t *rb)
-{
-    return rb->buf + sizeof(rb->buf);
-}
-
-size_t
-ringbuf_bytes_free(ringbuf_t *rb)
-{
-    if (rb->head >= rb->tail)
-        return ringbuf_capacity(rb) - (rb->head - rb->tail);
-    else
-        return rb->tail - rb->head - 1;
-}
-
-size_t
-ringbuf_bytes_used(ringbuf_t *rb)
-{
-    return ringbuf_capacity(rb) - ringbuf_bytes_free(rb);
-}
-
-bool
-ringbuf_full(ringbuf_t *rb)
-{
-    return ringbuf_bytes_free(rb) == 0;
-}
-
-bool
-ringbuf_empty(ringbuf_t *rb)
-{
-    return ringbuf_bytes_free(rb) == ringbuf_capacity(rb);
-}
-
-char *
-ringbuf_tail(ringbuf_t *rb)
-{
-    return rb->tail;
-}
-
-char *
-ringbuf_head(ringbuf_t *rb)
-{
-    return rb->head;
-}
-
-/*
- * This function calls read(2) and returns its value. It will only
- * call read(2) once, and may return a short count. If you get a short
- * count and want to keep reading from the file descriptor, simply
- * call the function again.
- *
- * The primary purpose of this function is to properly handle the case
- * where the ring buffer must wrap around the end of the allocated
- * contiguous buffer space.
- *
- * This function will happily overflow the ring buffer without
- * complaint. This permits the user to, e.g., discard data from a
- * pipe/socket that she doesn't care about in order to advance the
- * stream. When an overflow occurs, the state of the ring buffer is
- * guaranteed to be consistent, including the head and tail pointers.
- */
-
-ssize_t
-ringbuf_read(int fd, ringbuf_t *rb, size_t count)
-{
-    const char *bufend = ringbuf_end(rb);
-    size_t nfree = ringbuf_bytes_free(rb);
-
-    /* don't read beyond the end of the buffer */
-    count = MIN(bufend - rb->head, count);
-    ssize_t n = read(fd, (void *) rb->head, count);
-    if (n > 0) {
-        assert(rb->head + n <= bufend);
-        rb->head += n;
-
-        /* wrap? */
-        if (rb->head == bufend)
-            rb->head = rb->buf;
-
-        /* fix up the tail pointer if an overflow occurred */
-        if (n > nfree) {
-            if (rb->head + 1 == bufend)
-                rb->tail = rb->buf;
-            else
-                rb->tail = rb->head + 1;
-            assert(ringbuf_full(rb));
-        }
-    }
-
-    return n;
-}
-
-/*
- * This function calls write(2) and returns its value. It will only
- * call write(2) once, and may return a short count. If you get a
- * short count and want to keep writing to the file descriptor, simply
- * call the function again.
- *
- * The primary purpose of this function is to properly handle the case
- * where the ring buffer must wrap around the end of the allocated
- * contiguous buffer space.
- *
- * This function will not allow the ring buffer to underflow. If the
- * user requests to write more bytes than are currently used in the
- * ring buffer, the function will return 0.
- */
-ssize_t
-ringbuf_write(int fd, ringbuf_t *rb, size_t count)
-{
-    if (count > ringbuf_bytes_used(rb))
-        return 0;
-
-    const char *bufend = ringbuf_end(rb);
-    count = MIN(bufend - rb->tail, count);
-    ssize_t n = write(fd, (const void *) rb->tail, count);
-    if (n > 0) {
-        assert(rb->tail + n <= bufend);
-        rb->tail += n;
-
-        /* wrap? */
-        if (rb->tail == bufend)
-            rb->tail = rb->buf;
-    }
-
-    return n;
 }
 
 typedef struct echo_io
@@ -288,7 +130,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
 
     if (revents & EV_WRITE) {
         log(LOG_DEBUG, "echo_cb write event");
-        while (!ringbuf_empty(&w->rb)) {
+        while (!ringbuf_is_empty(&w->rb)) {
             ssize_t n = ringbuf_write(w->io.fd,
                                       &w->rb,
                                       ringbuf_bytes_used(&w->rb));
@@ -304,7 +146,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 }
             }
         }
-        if (ringbuf_empty(&w->rb))
+        if (ringbuf_is_empty(&w->rb))
             reset_echo_watcher(EV_A_ &w->io, EV_READ);
     }
     

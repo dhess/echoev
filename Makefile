@@ -18,10 +18,13 @@ help:
 	@echo "all - build echoev binary."
 	@echo "help - this message."
 
-echoev: logging.o echoev.o
+echoev: logging.o echoev.o ringbuf.o
 	$(LD) -o echoev $(LDFLAGS) -lev $^
 
 logging.o: logging.c logging.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+ringbuf.o: ringbuf.c ringbuf.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 echoev.o: echoev.c logging.h
