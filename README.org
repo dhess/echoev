@@ -16,10 +16,6 @@
   The code is licensed under the MIT license.
 
 * BUGS/LIMITATIONS
-  - The server always binds to the wildcard addresses (IPv4 and IPv6)
-    on port 7777. There's currently no way to change this other than
-    by hacking the source.
-
   - The server uses a per-connection ring buffer to prevent clients
     from DOSing the host (e.g., by writing an endless stream of bytes
     to the server without ever reading any of them back). The ring
