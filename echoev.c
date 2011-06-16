@@ -324,6 +324,11 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 if ((errno == EAGAIN) ||
                     (errno == EWOULDBLOCK) ||
                     (errno == EINTR)) {
+
+                    /*
+                     * Nothing more to read for now; write out what we
+                     * just read.
+                     */
                     if (nread)
                         reset_echo_watcher(EV_A_ &w->io, EV_READ | EV_WRITE);
                     return;
