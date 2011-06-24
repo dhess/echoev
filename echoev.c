@@ -50,6 +50,8 @@
 
 const char *version = "0.9";
 
+const char MSG_DELIMITER = '\n';
+
 static syslog_fun log;
 static setlogmask_fun logmask;
 
@@ -77,6 +79,9 @@ typedef struct echo_io
 {
     ev_io io;
     ringbuf_t rb;
+
+    /* Bytes remaining to be written in a response message. */
+    size_t msg_len;
 } echo_io;
     
 /*
@@ -118,6 +123,19 @@ stop_echo_watcher(EV_P_ echo_io *w)
     free(w);
 }
 
+/*
+ * Returns 0 if no full message yet received.
+ */
+size_t
+next_msg_len(const ringbuf_t *rb, char delimiter)
+{
+    size_t delim_location = ringbuf_findchr(rb, delimiter, 0);
+    if (delim_location < ringbuf_bytes_used(rb))
+        return delim_location + 1;
+    else
+        return 0;
+}
+
 void
 reset_echo_watcher(EV_P_ ev_io *w, int revents);
 
@@ -130,10 +148,10 @@ echo_cb(EV_P_ ev_io *w_, int revents)
 
     if (revents & EV_WRITE) {
         log(LOG_DEBUG, "echo_cb write event");
-        while (!ringbuf_is_empty(&w->rb)) {
+        while (w->msg_len) {
             ssize_t n = ringbuf_write(w->io.fd,
                                       &w->rb,
-                                      ringbuf_bytes_used(&w->rb));
+                                      w->msg_len);
             if (n == -1) {
                 if ((errno == EAGAIN) ||
                     (errno == EWOULDBLOCK) ||
@@ -144,10 +162,16 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
-            }
+            } else
+                w->msg_len -= n;
         }
-        if (ringbuf_is_empty(&w->rb))
-            reset_echo_watcher(EV_A_ &w->io, EV_READ);
+        if (w->msg_len == 0) {
+
+            /* Look for more messages, disable write events if none. */
+            w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
+            if (w->msg_len == 0)
+                reset_echo_watcher(EV_A_ &w->io, EV_READ);
+        }
     }
     
     if (revents & EV_READ) {
@@ -159,6 +183,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                                      ringbuf_bytes_free(&w->rb));
             if (n == 0) {
                 /* eof */
+                /* XXX dhess - BUG: should drain the ring buffer. */
                 stop_echo_watcher(EV_A_ w);
                 return;
             }
@@ -168,11 +193,16 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     (errno == EINTR)) {
 
                     /*
-                     * Nothing more to read for now; write out what we
-                     * just read.
+                     * Nothing more to read for now; schedule a write
+                     * if we've received a full message and there's
+                     * not already another message to be written.
                      */
-                    if (nread)
-                        reset_echo_watcher(EV_A_ &w->io, EV_READ | EV_WRITE);
+                    if (nread && (w->msg_len == 0)) {
+                        w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
+                        if (w->msg_len)
+                            reset_echo_watcher(EV_A_ &w->io,
+                                               EV_READ | EV_WRITE);
+                    }
                     return;
                 } else {
                     log(LOG_ERR, "read: %m");
@@ -206,6 +236,7 @@ make_echo_watcher(int wfd)
     echo_io *watcher = malloc(sizeof(echo_io));
     if (watcher) {
         ringbuf_init(&watcher->rb);
+        watcher->msg_len = 0;
         ev_io *io = &watcher->io;
         ev_io_init(io, echo_cb, wfd, EV_READ);
     }
