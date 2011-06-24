@@ -52,6 +52,12 @@ const char *version = "0.9";
 
 const char MSG_DELIMITER = '\n';
 
+/*
+ * Default "cool-down" duration (in seconds) when accept() fails due
+ * to insufficient resources.
+ */
+const ev_tstamp COOLDOWN_DURATION = 10.0;
+
 static syslog_fun log;
 static setlogmask_fun logmask;
 
@@ -244,6 +250,37 @@ reset_echo_watcher(EV_P_ ev_io *w, int revents)
     ev_io_start(EV_A_ w);
 }
 
+/*
+ * When accept() in listen_cb fails due to insufficient resources, it
+ * installs one of these "cool-down timers."
+ */
+typedef struct cooldown_timer
+{
+    ev_timer timer;
+    ev_io *listener;
+} cooldown_timer;
+
+void
+cooldown_cb(EV_P_ ev_timer *t_, int revents)
+{
+    cooldown_timer *t = (cooldown_timer *) t_;
+
+    ev_timer_stop(EV_A_ &t->timer);
+    ev_io_start(EV_A_ t->listener);
+    free(t);
+}
+
+cooldown_timer *
+make_cooldown_timer(ev_tstamp after, ev_io *listener)
+{
+    cooldown_timer *t = malloc(sizeof(cooldown_timer));
+    if (t) {
+        t->listener = listener;
+        ev_timer_init(&t->timer, cooldown_cb, after, 0);
+    }
+    return t;
+}
+
 echo_io *
 make_echo_watcher(int wfd)
 {
@@ -293,6 +330,28 @@ listen_cb(EV_P_ ev_io *w, int revents)
 #endif
                 (errno == EINTR))
                 break;
+            else if ((errno == EMFILE) ||
+                     (errno == ENFILE) ||
+                     (errno == ENOMEM)) {
+
+                /*
+                 * Running out of resources; log error and stop
+                 * accepting connections for a bit.
+                 */
+                log(LOG_ERR, "accept: %m");
+                log(LOG_WARNING, "listen_cb: insufficient resources, backing off for a bit");
+                cooldown_timer *t = make_cooldown_timer(COOLDOWN_DURATION, w);
+                if (!t) {
+
+                    /* We're really screwed! */
+                    /* XXX dhess - should probably kill connections here. */
+                    log(LOG_ERR, "make_cooldown_timer: %m");
+                } else {
+                    ev_io_stop(EV_A_ w);
+                    ev_timer_start(EV_A_ &t->timer);
+                }
+                break;
+            }
             else {
                 log(LOG_ERR, "accept: %m");
                 break;
