@@ -8,7 +8,7 @@ CFLAGS=-O2 -Wall -g $(INCLUDES) $(PLATFORM)
 
 LD=gcc
 LIBS=-L /usr/local/lib
-LDFLAGS=$(LIBS)
+LDFLAGS=$(LIBS) -g
 
 all:	echoev
 
