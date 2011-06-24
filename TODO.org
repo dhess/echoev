@@ -1,5 +1,5 @@
 
-* Only echo back whole records at a time (delimited by '\n').
+* Drain ring buffer when we receive an EOF from client.
 
 * Double-check all "funky" cases listed in ev man page and in UNPv1.
 
