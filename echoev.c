@@ -162,8 +162,10 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
-            } else
+            } else {
                 w->msg_len -= n;
+                log(LOG_DEBUG, "echo_cb %zd bytes written", n);
+            }
         }
         if (w->msg_len == 0) {
 
@@ -209,8 +211,10 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
-            } else
+            } else {
                 nread += n;
+                log(LOG_DEBUG, "echo_cb %zd bytes read", n);
+            }
         }
 
         /* overflow */
