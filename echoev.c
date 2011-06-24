@@ -192,7 +192,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
 
                 /* EOF: drain remaining writes or close connection */
                 log(LOG_DEBUG, "echo_cb EOF received");
-                if (nread && w->msg_len == 0)
+                if (nread && (w->msg_len == 0))
                     w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
                 if (w->msg_len) {
                     w->half_closed = true;
