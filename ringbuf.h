@@ -1,5 +1,8 @@
+#ifndef _RINGBUF_H_
+#define _RINGBUF_H_
+
 /*
- * ringbuf.h - C ring buffer (FIFO) implementation.
+ * ringbuf.h - C ring buffer (FIFO) interface.
  *
  * Written in 2011 by Drew Hess <dhess-src@bothan.net>.
  *
@@ -8,13 +11,10 @@
  * the public domain worldwide. This software is distributed without
  * any warranty.
  *
- * For the full statement of the dedication, see the Creative Commons
- * CC0 Public Domain Dedication at
+ * You should have received a copy of the CC0 Public Domain Dedication
+ * along with this software. If not, see
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
-
-#include <stddef.h>
-#include <sys/types.h>
 
 /*
  * A naive byte-addressable ring buffer FIFO implementation.
@@ -34,18 +34,27 @@
  * comfortable that it functions as intended.
  */
 
-/*
- * The size of the internal buffer, in bytes. One byte wil always be
- * unused, to distinguish the buffer-full state from the buffer-empty
- * state.
- */
-#define MAX_BUF 4096
+#include <stddef.h>
+#include <sys/types.h>
 
+#define _RINGBUF_SIZE 4096
 typedef struct ringbuf_t
 {
-    char buf[MAX_BUF];
+    char buf[_RINGBUF_SIZE];
     void *head, *tail;
 } ringbuf_t;
+
+/*
+ * The size of the internal buffer, in bytes. One byte will always be
+ * unused, to distinguish the "buffer full" state from the "buffer
+ * empty" state.
+ *
+ * For future-proofness, use this function rather than the #define'd
+ * _RINGBUF_SIZE value; using the function makes it easier later to
+ * support ring buffers with dynamic (and different) sizes.
+ */
+size_t
+ringbuf_buffer_size(const ringbuf_t *rb);
 
 /*
  * Initialize/reset a ring buffer.
@@ -83,6 +92,28 @@ ringbuf_tail(const ringbuf_t *rb);
 const void *
 ringbuf_head(const ringbuf_t *rb);
 
+/*
+ * Given a ring buffer rb and a pointer to a location within its
+ * contiguous buffer, return the a pointer to the next logical
+ * location in the ring buffer.
+ *
+ * If p does not point somewhere within the ring buffer's contiguous
+ * buffer, the function returns 0.
+ */
+void *
+ringbuf_nextp(ringbuf_t *rb, void *p);
+
+/*
+ * Locate the first occurrence of character c (converted to a char) in
+ * ring buffer rb, beginning the search at offset bytes from the ring
+ * buffer's tail pointer. The function returns the offset of the
+ * character from the ring buffer's tail pointer, if found. If c does
+ * not occur in the ring buffer, the function returns the number of
+ * bytes used in the ring buffer.
+ */
+size_t
+ringbuf_findchr(const ringbuf_t *rb, int c, size_t offset);
+ 
 /*
  * Copy n bytes from a contiguous memory area src into the ring buffer
  * dst. Returns the ring buffer's new head pointer.
@@ -189,3 +220,5 @@ ringbuf_write(int fd, ringbuf_t *rb, size_t count);
  */
 void *
 ringbuf_copy(ringbuf_t *dst, ringbuf_t *src, size_t count);
+
+#endif /* _RINGBUF_H_ */

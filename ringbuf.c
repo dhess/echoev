@@ -8,8 +8,8 @@
  * the public domain worldwide. This software is distributed without
  * any warranty.
  *
- * For the full statement of the dedication, see the Creative Commons
- * CC0 Public Domain Dedication at
+ * You should have received a copy of the CC0 Public Domain Dedication
+ * along with this software. If not, see
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
@@ -22,6 +22,12 @@
 #include <sys/param.h>
 #include <assert.h>
 
+size_t
+ringbuf_buffer_size(const ringbuf_t *rb)
+{
+    return _RINGBUF_SIZE;
+}
+
 void
 ringbuf_init(ringbuf_t *rb)
 {
@@ -31,13 +37,18 @@ ringbuf_init(ringbuf_t *rb)
 size_t
 ringbuf_capacity(const ringbuf_t *rb)
 {
-    return sizeof(rb->buf) - 1;
+    return ringbuf_buffer_size(rb) - 1;
 }
 
+/*
+ * Return a pointer to one-past-the-end of the ring buffer's
+ * contiguous buffer. You shouldn't normally need to use this function
+ * unless you're writing a new ringbuf_* function.
+ */
 static const void *
 ringbuf_end(const ringbuf_t *rb)
 {
-    return rb->buf + sizeof(rb->buf);
+    return rb->buf + ringbuf_buffer_size(rb);
 }
 
 size_t
@@ -79,14 +90,44 @@ ringbuf_head(const ringbuf_t *rb)
     return rb->head;
 }
 
+/*
+ * Same as ringbuf_nextp, minus the range check; used by internal
+ * functions where the check is unnecessary.
+ */
 static void *
-ringbuf_smash_tail(ringbuf_t *rb)
+_ringbuf_nextp(ringbuf_t *rb, void *p)
+{
+    return rb->buf +
+        ((++p - (const void *) rb->buf) % ringbuf_buffer_size(rb));
+}
+
+void *
+ringbuf_nextp(ringbuf_t *rb, void *p)
+{
+    if (p < (void *) rb->buf || p >= ringbuf_end(rb))
+        return 0;
+    else
+        return _ringbuf_nextp(rb, p);
+}
+
+size_t
+ringbuf_findchr(const ringbuf_t *rb, int c, size_t offset)
 {
     const void *bufend = ringbuf_end(rb);
-    if (rb->head + 1 == bufend)
-        return rb->buf;
+    size_t bytes_used = ringbuf_bytes_used(rb);
+    if (offset >= bytes_used)
+        return bytes_used;
+
+    const void *start = rb->buf +
+        (((rb->tail -
+           (const void *) rb->buf) + offset) % ringbuf_buffer_size(rb));
+    assert(bufend > start);
+    size_t n = MIN(bufend - start, bytes_used - offset);
+    const void *found = memchr(start, c, n);
+    if (found)
+        return offset + found - start;
     else
-        return rb->head + 1;
+        return ringbuf_findchr(rb, c, offset + n);
 }
 
 void *
@@ -110,7 +151,7 @@ ringbuf_memcpy_into(ringbuf_t *dst, const void *src, size_t count)
     }
 
     if (overflow) {
-        dst->tail = ringbuf_smash_tail(dst);
+        dst->tail = _ringbuf_nextp(dst, dst->head);
         assert(ringbuf_is_full(dst));
     }
 
@@ -137,7 +178,7 @@ ringbuf_read(int fd, ringbuf_t *rb, size_t count)
 
         /* fix up the tail pointer if an overflow occurred */
         if (n > nfree) {
-            rb->tail = ringbuf_smash_tail(rb);
+            rb->tail = _ringbuf_nextp(rb, rb->head);
             assert(ringbuf_is_full(rb));
         }
     }
@@ -226,7 +267,7 @@ ringbuf_copy(ringbuf_t *dst, ringbuf_t *src, size_t count)
     assert(count + ringbuf_bytes_used(src) == src_bytes_used);
     
     if (overflow) {
-        dst->tail = ringbuf_smash_tail(dst);
+        dst->tail = _ringbuf_nextp(dst, dst->head);
         assert(ringbuf_is_full(dst));
     }
 
