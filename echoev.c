@@ -52,12 +52,6 @@ const char *version = "0.9";
 
 const char MSG_DELIMITER = '\n';
 
-/*
- * Default "cool-down" duration (in seconds) when accept() fails due
- * to insufficient resources.
- */
-const ev_tstamp COOLDOWN_DURATION = 10.0;
-
 static syslog_fun log;
 static setlogmask_fun logmask;
 
@@ -250,37 +244,6 @@ reset_echo_watcher(EV_P_ ev_io *w, int revents)
     ev_io_start(EV_A_ w);
 }
 
-/*
- * When accept() in listen_cb fails due to insufficient resources, it
- * installs one of these "cool-down timers."
- */
-typedef struct cooldown_timer
-{
-    ev_timer timer;
-    ev_io *listener;
-} cooldown_timer;
-
-void
-cooldown_cb(EV_P_ ev_timer *t_, int revents)
-{
-    cooldown_timer *t = (cooldown_timer *) t_;
-
-    ev_timer_stop(EV_A_ &t->timer);
-    ev_io_start(EV_A_ t->listener);
-    free(t);
-}
-
-cooldown_timer *
-make_cooldown_timer(ev_tstamp after, ev_io *listener)
-{
-    cooldown_timer *t = malloc(sizeof(cooldown_timer));
-    if (t) {
-        t->listener = listener;
-        ev_timer_init(&t->timer, cooldown_cb, after, 0);
-    }
-    return t;
-}
-
 echo_io *
 make_echo_watcher(int wfd)
 {
@@ -298,11 +261,36 @@ make_echo_watcher(int wfd)
     return watcher;
 }
 
+/*
+ * Each "listener" watcher comes with a cooldown timer. When accept()
+ * in listen_cb fails due to insufficient resources, it stops the
+ * listener watcher and starts a cool-down timer, so that accept()
+ * doesn't repeatedly fail. When the timer expires, it re-activates
+ * the listener.
+ *
+ * The cooldown timer is created when the listener is created; it
+ * could be created on-demand when accept() fails, but that would
+ * exacerbate the resource problems, and would likely fail, anyway.
+ */
+typedef struct cooldown_timer
+{
+    ev_timer timer;
+    ev_io *listener;
+} cooldown_timer;
+
+typedef struct listener_io
+{
+    ev_io listener;
+    cooldown_timer cooldown;
+} listener_io;
+
 void
-listen_cb(EV_P_ ev_io *w, int revents)
+listen_cb(EV_P_ ev_io *w_, int revents)
 {
     log(LOG_DEBUG, "listen_cb called");
 
+    listener_io *w = (listener_io *) w_;
+    
     /*
      * libev recommends calling accept() in a loop for best
      * performance when using the select or poll back ends. The ev_io
@@ -312,7 +300,7 @@ listen_cb(EV_P_ ev_io *w, int revents)
         struct sockaddr_storage addr;
         socklen_t addr_len = sizeof(addr);
 
-        int fd = accept(w->fd, (struct sockaddr *) &addr, &addr_len);
+        int fd = accept(w->listener.fd, (struct sockaddr *) &addr, &addr_len);
         if (fd == -1) {
 
             /*
@@ -340,16 +328,8 @@ listen_cb(EV_P_ ev_io *w, int revents)
                  */
                 log(LOG_ERR, "accept: %m");
                 log(LOG_WARNING, "listen_cb: insufficient resources, backing off for a bit");
-                cooldown_timer *t = make_cooldown_timer(COOLDOWN_DURATION, w);
-                if (!t) {
-
-                    /* We're really screwed! */
-                    /* XXX dhess - should probably kill connections here. */
-                    log(LOG_ERR, "make_cooldown_timer: %m");
-                } else {
-                    ev_io_stop(EV_A_ w);
-                    ev_timer_start(EV_A_ &t->timer);
-                }
+                ev_io_stop(EV_A_ &w->listener);
+                ev_timer_start(EV_A_ &w->cooldown.timer);
                 break;
             }
             else {
@@ -409,17 +389,36 @@ listen_on(const struct sockaddr *addr, socklen_t addr_len)
     return -1;
 }
 
-ev_io *
+/*
+ * Default "cool-down" duration (in seconds).
+ */
+const ev_tstamp COOLDOWN_DURATION = 10.0;
+
+void
+cooldown_cb(EV_P_ ev_timer *t_, int revents)
+{
+    cooldown_timer *t = (cooldown_timer *) t_;
+    ev_timer_stop(EV_A_ &t->timer);
+    ev_io_start(EV_A_ t->listener);
+}
+
+listener_io *
 make_listener(const struct sockaddr *addr, socklen_t addr_len)
 {
     int listen_fd = listen_on(addr, addr_len);
     if (listen_fd == -1)
         return NULL;
 
-    ev_io *watcher = malloc(sizeof(ev_io));
-    if (watcher)
-        ev_io_init(watcher, listen_cb, listen_fd, EV_READ);
-    return watcher;
+    listener_io *lio = malloc(sizeof(listener_io));
+    if (lio) {
+        ev_io_init(&lio->listener, listen_cb, listen_fd, EV_READ);
+        ev_timer_init(&lio->cooldown.timer,
+                      cooldown_cb,
+                      COOLDOWN_DURATION,
+                      0);
+        lio->cooldown.listener = &lio->listener;
+    }
+    return lio;
 }
                      
 const char *default_portstr = "7777";
@@ -584,13 +583,14 @@ main(int argc, char *argv[])
             exit(err);
         }
         assert(!res->ai_next);
-        ev_io *listen_watcher = make_listener(res->ai_addr, res->ai_addrlen);
-        if (listen_watcher) {
+        listener_io *lio =
+            make_listener(res->ai_addr, res->ai_addrlen);
+        if (lio) {
             log_with_addr(LOG_NOTICE,
                           "listening on %s",
                           res->ai_addr,
                           res->ai_addrlen);
-            ev_io_start(loop, listen_watcher);
+            ev_io_start(loop, &lio->listener);
         }
         else
             exit(errno);
