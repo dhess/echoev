@@ -79,6 +79,7 @@ typedef struct echo_io
 {
     ev_io io;
     ringbuf_t rb;
+    bool half_closed;
 
     /* Bytes remaining to be written in a response message. */
     size_t msg_len;
@@ -169,10 +170,14 @@ echo_cb(EV_P_ ev_io *w_, int revents)
         }
         if (w->msg_len == 0) {
 
-            /* Look for more messages, disable write events if none. */
+            /* Look for more messages */
             w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
-            if (w->msg_len == 0)
-                reset_echo_watcher(EV_A_ &w->io, EV_READ);
+            if (w->msg_len == 0) {
+                if (w->half_closed)
+                    stop_echo_watcher(EV_A_ w);
+                else
+                    reset_echo_watcher(EV_A_ &w->io, EV_READ);
+            }
         }
     }
     
@@ -184,9 +189,17 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                                      &w->rb,
                                      ringbuf_bytes_free(&w->rb));
             if (n == 0) {
-                /* eof */
-                /* XXX dhess - BUG: should drain the ring buffer. */
-                stop_echo_watcher(EV_A_ w);
+
+                /* EOF: drain remaining writes or close connection */
+                log(LOG_DEBUG, "echo_cb EOF received");
+                if (nread && w->msg_len == 0)
+                    w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
+                if (w->msg_len) {
+                    w->half_closed = true;
+                    reset_echo_watcher(EV_A_ &w->io, EV_WRITE);
+                }
+                else
+                    stop_echo_watcher(EV_A_ w);
                 return;
             }
             else if (n == -1) {
@@ -240,6 +253,7 @@ make_echo_watcher(int wfd)
     echo_io *watcher = malloc(sizeof(echo_io));
     if (watcher) {
         ringbuf_init(&watcher->rb);
+        watcher->half_closed = false;
         watcher->msg_len = 0;
         ev_io *io = &watcher->io;
         ev_io_init(io, echo_cb, wfd, EV_READ);
