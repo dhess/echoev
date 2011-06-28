@@ -75,6 +75,13 @@ log_with_addr(int priority,
         log(priority, fmt, host);
 }
 
+typedef struct echo_timer
+{
+    ev_timer timer;
+    ev_tstamp last_activity;
+    struct echo_io *eio;
+} echo_timer;
+
 typedef struct echo_io
 {
     ev_io io;
@@ -83,6 +90,8 @@ typedef struct echo_io
 
     /* Bytes remaining to be written in a response message. */
     size_t msg_len;
+
+    echo_timer timeout;
 } echo_io;
     
 /*
@@ -120,6 +129,7 @@ stop_echo_watcher(EV_P_ echo_io *w)
                       (const struct sockaddr *) &addr,
                       addr_len);
     ev_io_stop(EV_A_ &w->io);
+    ev_timer_stop(EV_A_ &w->timeout.timer);
     close(w->io.fd);
     free(w);
 }
@@ -165,6 +175,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 }
             } else {
                 w->msg_len -= n;
+                w->timeout.last_activity = ev_now(EV_A);
                 log(LOG_DEBUG, "echo_cb %zd bytes written", n);
             }
         }
@@ -192,6 +203,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
 
                 /* EOF: drain remaining writes or close connection */
                 log(LOG_DEBUG, "echo_cb EOF received");
+                w->timeout.last_activity = ev_now(EV_A);
                 if (nread && (w->msg_len == 0))
                     w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
                 if (w->msg_len) {
@@ -226,6 +238,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 }
             } else {
                 nread += n;
+                w->timeout.last_activity = ev_now(EV_A);
                 log(LOG_DEBUG, "echo_cb %zd bytes read", n);
             }
         }
@@ -233,6 +246,29 @@ echo_cb(EV_P_ ev_io *w_, int revents)
         /* overflow */
         log(LOG_WARNING, "read buffer full");
         stop_echo_watcher(EV_A_ w);
+    }
+}
+
+/* Default connection timeout, in seconds. */
+static const ev_tstamp ECHO_CONNECTION_TIMEOUT = 120.0;
+
+void
+timeout_cb(EV_P_ ev_timer *t_, int revents)
+{
+    echo_timer *t = (echo_timer *) t_;
+
+    ev_tstamp now = ev_now(EV_A);
+    ev_tstamp timeout = t->last_activity + ECHO_CONNECTION_TIMEOUT;
+    if (timeout < now) {
+
+        /* A real timeout. */
+        log(LOG_NOTICE, "Timeout, closing connection");
+        stop_echo_watcher(EV_A_ t->eio);
+    } else {
+
+        /* False alarm, re-arm timeout. */
+        t_->repeat = timeout - now;
+        ev_timer_again(EV_A_ t_);
     }
 }
 
@@ -245,7 +281,7 @@ reset_echo_watcher(EV_P_ ev_io *w, int revents)
 }
 
 echo_io *
-make_echo_watcher(int wfd)
+make_echo_watcher(EV_P_ int wfd)
 {
     if (set_nonblocking(wfd) == -1)
         return 0;
@@ -255,8 +291,15 @@ make_echo_watcher(int wfd)
         ringbuf_init(&watcher->rb);
         watcher->half_closed = false;
         watcher->msg_len = 0;
+
         ev_io *io = &watcher->io;
         ev_io_init(io, echo_cb, wfd, EV_READ);
+
+        ev_timer *timer = &watcher->timeout.timer;
+        ev_init(timer, timeout_cb);
+        watcher->timeout.last_activity = ev_now(EV_A);
+        watcher->timeout.eio = watcher;
+        timeout_cb(EV_A_ timer, EV_TIMER);
     }
     return watcher;
 }
@@ -342,7 +385,7 @@ listen_cb(EV_P_ ev_io *w_, int revents)
                       "accepted connection from %s",
                       (const struct sockaddr *) &addr,
                       addr_len);
-        echo_io *watcher = make_echo_watcher(fd);
+        echo_io *watcher = make_echo_watcher(EV_A_ fd);
         if (!watcher) {
             log(LOG_ERR, "make_echo_watcher: %m");
             close(fd);
