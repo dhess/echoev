@@ -14,9 +14,10 @@
   3. make
 
 * LICENSE
-  Most of the code is licensed under the MIT license. The code in
-  ringbuf.[ch] is dedicated to the public domain under the terms of
-  the Creative Commons CC0 public domain dedication. See
+  Most of the code is licensed under the MIT license.
+
+  The code in ringbuf.[ch] is dedicated to the public domain under the
+  terms of the Creative Commons CC0 public domain dedication. See
   http://creativecommons.org/publicdomain/zero/1.0/legalcode for
   details.
 
@@ -29,7 +30,6 @@
     write a single line greater than 4095 bytes. If the client exceeds
     its buffer size, the server will unceremoniously close the
     connection.
-
 
 * CONTACT
   Drew Hess <dhess-src@bothan.net>
