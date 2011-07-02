@@ -48,7 +48,7 @@
 #include "logging.h"
 #include "ringbuf.h"
 
-const char *version = "0.9";
+const char *version = "1.0";
 
 const char MSG_DELIMITER = '\n';
 
