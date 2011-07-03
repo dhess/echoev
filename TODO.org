@@ -1,1 +1,23 @@
 * Write a client.
+
+** Install connect timeout.
+
+*** Make it command line-configurable.
+
+** quit/escape sequence.
+
+*** Run shutdown(fd, SHUT_WR) on quit.
+
+** Flag to force IPv4/IPv6 connection.
+
+** Clean up includes.
+
+** Cycle through getaddrinfo results until one connects.
+
+** Add a --numeric flag to bypass name resolution.
+
+** Handle "odd" UNPv1e3 and libev client cases gracefully.
+
+** Configurable logging prefixes.
+
+** Test on OpenBSD.
