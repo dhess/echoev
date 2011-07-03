@@ -2,8 +2,11 @@
   echoev is a simple TCP echo server, built on libev. It has several
   options; run 'echoev --help' for usage.
 
+  echoevc is a simple TCP echo client, also built on libev. It, too,
+  has several options; run 'echoevc --help' for usage.
+
 * WHY
-  I wrote echoev to get some experience with libev.
+  I wrote echoev and echoevc to get some experience with libev.
 
 * INSTALLING
   1. In the Makefile, uncomment the PLATFORM define for your platform.
