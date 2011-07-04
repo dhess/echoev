@@ -20,4 +20,6 @@
 
 ** Configurable logging prefixes.
 
+** Replace fatal exits with some kind of error handler.
+
 ** Test on OpenBSD.
