@@ -113,6 +113,54 @@ free_msg_buf(msg_buf *buf)
     free(buf);
 }
 
+/* Default protocol timeout, in seconds. */
+static const ev_tstamp ECHO_PROTO_TIMEOUT = 10.0;
+
+/*
+ * Handles timeouts on established connections.
+ */
+void
+echo_proto_timeout_cb(EV_P_ ev_timer *t_, int revents)
+{
+    io_timer *t = (io_timer *) t_;
+
+    ev_tstamp now = ev_now(EV_A);
+    ev_tstamp timeout = t->last_activity + ECHO_PROTO_TIMEOUT;
+    if (timeout < now) {
+
+        /* A real timeout. */
+        log(LOG_NOTICE, "Timeout, closing connection");
+        exit(1);
+    } else {
+
+        /* False alarm, re-arm timeout. */
+        t_->repeat = timeout - now;
+        ev_timer_again(EV_A_ t_);
+    }
+}
+
+/*
+ * Start an io_pair watcher and its protocol timer. Assumes both have
+ * already been initialized.
+ */
+void
+start_watcher(EV_P_ io_pair *w)
+{
+    ev_io_start(EV_A_ &w->me);
+    w->timeout.last_activity = ev_now(EV_A);
+    echo_proto_timeout_cb(EV_A_ &w->timeout.timer, EV_TIMER);
+}
+
+/*
+ * Stop an io_pair watcher and its protocol timer.
+ */
+void
+stop_watcher(EV_P_ io_pair *w)
+{
+    ev_io_stop(EV_A_ &w->me);
+    ev_timer_stop(EV_A_ &w->timeout.timer);
+}
+
 /*
  * Call this function when you're done reading from stdin, and you
  * want to clean up after the stdin watcher.
@@ -121,11 +169,10 @@ free_msg_buf(msg_buf *buf)
  * shares with its partner, because the partner may still need it.
  */
 void
-stop_stdin_watcher(EV_P_ io_pair *w)
+free_stdin_watcher(EV_P_ io_pair *w)
 {
-    log(LOG_DEBUG, "Stopping stdin watcher.");
-    ev_io_stop(EV_A_ &w->me);
-    ev_timer_stop(EV_A_ &w->timeout.timer);
+    log(LOG_DEBUG, "Freeing stdin watcher.");
+    stop_watcher(EV_A_ w);
     close(w->me.fd); /* stdin */
     free(w);
 }
@@ -141,15 +188,14 @@ stop_stdin_watcher(EV_P_ io_pair *w)
  * i.e., you must stop the stdin watcher, as well.
  */
 void
-stop_srv_write_watcher(EV_P_ io_pair *w)
+free_srv_write_watcher(EV_P_ io_pair *w)
 {
-    log(LOG_DEBUG, "Stopping server write watcher.");
-    ev_io_stop(EV_A_ &w->me);
-    ev_timer_stop(EV_A_ &w->timeout.timer);
+    log(LOG_DEBUG, "Freeing server write watcher.");
+    stop_watcher(EV_A_ w);
 
     /* *Don't* close the file descriptor here, just want a half-close. */
     if (shutdown(w->me.fd, SHUT_WR) == -1) {
-        log(LOG_ERR, "stop_srv_write_watcher shutdown: %m");
+        log(LOG_ERR, "free_srv_write_watcher shutdown: %m");
         exit(errno);
     }
 
@@ -182,7 +228,7 @@ stdin_cb(EV_P_ ev_io *w_, int revents)
                 if (nread && (buf->msg_len == 0))
                     buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
                 if (buf->msg_len)
-                    ev_io_start(EV_A_ &w->partner->me);
+                    start_watcher(EV_A_ w->partner);
                 else {
 
                     /*
@@ -192,9 +238,9 @@ stdin_cb(EV_P_ ev_io *w_, int revents)
                      * messages (those without a terminating
                      * MSG_DELIMITER), by design.
                      */
-                    stop_srv_write_watcher(EV_A_ w->partner);
+                    free_srv_write_watcher(EV_A_ w->partner);
                 }
-                stop_stdin_watcher(EV_A_ w);
+                free_stdin_watcher(EV_A_ w);
                 return;
             } else if (n == -1) {
                 if ((errno == EAGAIN) ||
@@ -209,7 +255,7 @@ stdin_cb(EV_P_ ev_io *w_, int revents)
                     if (nread && (buf->msg_len == 0)) {
                         buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
                         if (buf->msg_len)
-                            ev_io_start(EV_A_ &w->partner->me);
+                            start_watcher(EV_A_ w->partner);
                     }
                     return;
                 } else {
@@ -272,49 +318,10 @@ srv_write_cb(EV_P_ ev_io *w_, int revents)
             /* Look for more messages; stop if none. */
             buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
             if (buf->msg_len == 0)
-                ev_io_stop(EV_A_ &w->me);
+                stop_watcher(EV_A_ w);
         }
     } else
         log(LOG_WARNING, "srv_write_cb spurious callback!");
-}
-
-/* Default protocol timeout, in seconds. */
-static const ev_tstamp ECHO_PROTO_TIMEOUT = 120.0;
-
-/*
- * Handles timeouts on established connections.
- */
-void
-echo_proto_timeout_cb(EV_P_ ev_timer *t_, int revents)
-{
-    io_timer *t = (io_timer *) t_;
-
-    ev_tstamp now = ev_now(EV_A);
-    ev_tstamp timeout = t->last_activity + ECHO_PROTO_TIMEOUT;
-    if (timeout < now) {
-
-        /* A real timeout. */
-        log(LOG_NOTICE, "Timeout, closing connection");
-        exit(1);
-    } else {
-
-        /* False alarm, re-arm timeout. */
-        t_->repeat = timeout - now;
-        ev_timer_again(EV_A_ t_);
-    }
-}
-
-/*
- * Call this function after creating an io_timer to get the timeout
- * mechanism started.
- */
-void
-init_echo_proto_timer(EV_P_ io_timer *timeout)
-{
-    ev_timer *timer = &timeout->timer;
-    ev_init(timer, echo_proto_timeout_cb);
-    timeout->last_activity = ev_now(EV_A);
-    echo_proto_timeout_cb(EV_A_ timer, EV_TIMER);
 }
 
 typedef void (* ev_io_cb)(EV_P_ ev_io *, int);
@@ -330,10 +337,11 @@ typedef void (* ev_io_cb)(EV_P_ ev_io *, int);
  * network socket and writing to stdout.
  *
  * This function creates the new watchers, initializes them, and
- * starts their protocol timeout timers. It is agnostic about the
- * watchers' behaviors, so it works for either case. It does *not*
- * start either watcher: this is the responsibility of the caller, as
- * which one must be started depends on which pair is being created.
+ * initializes (but does not start) their protocol timeout timers. It
+ * is agnostic about the watchers' behaviors, so it works for either
+ * case. It does *not* start either watcher: this is the
+ * responsibility of the caller, as which one must be started depends
+ * on which pair is being created.
  *
  * The pair of watchers shares a msg_buf structure, which contains a
  * ring buffer and a message length count. As the C language has no
@@ -379,10 +387,9 @@ make_io_pair(EV_P_ int std_fd,
     net_io->partner = std_io;
         
     ev_io_init(&std_io->me, std_cb, std_fd, std_revents);
+    ev_init(&std_io->timeout.timer, echo_proto_timeout_cb);
     ev_io_init(&net_io->me, net_cb, net_fd, net_revents);
-    init_echo_proto_timer(EV_A_ &std_io->timeout);
-    init_echo_proto_timer(EV_A_ &net_io->timeout);
-
+    ev_init(&net_io->timeout.timer, echo_proto_timeout_cb);
     return std_io;
 
   err_buf_io:
@@ -497,7 +504,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
         }
 
         /* Only start the stdin watcher; it gets the ball rolling. */
-        ev_io_start(EV_A_ &stdin_io->me);
+        start_watcher(EV_A_ stdin_io);
 
         /* Don't need the connect watcher anymore. */
         ev_io_stop(EV_A_ w);
