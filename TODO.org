@@ -4,6 +4,12 @@
 
 *** Make it command line-configurable.
 
+** Don't run a timeout timer on stdout.
+
+** Handle server early EOF properly.
+
+*** by exiting? or at least ensuring srv_write_cb isn't called anymore.
+
 ** Flag to force IPv4/IPv6 connection.
 
 ** Clean up includes.

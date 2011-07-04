@@ -204,6 +204,48 @@ free_srv_write_watcher(EV_P_ io_pair *w)
 }
 
 /*
+ * Call this function when you're done reading from the echo server,
+ * and you want to clean up after the echo server read watcher. It
+ * also closes the echo server socket.
+ *
+ * This function does *not* free the msg_buf that the echo server read
+ * watcher shares with its partner (the stdout writer), because the
+ * partner may still need it.
+ *
+ * NB: once you call this function, you can no longer write to (or
+ * read from) the echo server, as it closes the connection; i.e, you
+ * can no longer call srv_write_cb.
+ */
+void
+free_srv_read_watcher(EV_P_ io_pair *w)
+{
+    log(LOG_DEBUG, "Freeing server read watcher.");
+    stop_watcher(EV_A_ w);
+    close(w->me.fd); /* echo server socket */
+    free(w);
+}
+
+/*
+ * Call this function when you're done writing to stdout, and you want
+ * to clean up after the stdout watcher. This function frees the
+ * msg_buf that the watcher shares with the echo server read
+ * watcher. It also closes stdout.
+ *
+ * NB: once you call this function, you can no longer call
+ * srv_read_cb; i.e., you must stop the echo server read watcher, as
+ * well.
+ */
+void
+free_stdout_watcher(EV_P_ io_pair *w)
+{
+    log(LOG_DEBUG, "Freeing stdout watcher.");
+    stop_watcher(EV_A_ w);
+    close(w->me.fd); /* stdout */
+    free_msg_buf(w->buf);
+    free(w);
+}
+
+/*
  * Reads input from stdin, and schedules it for writing to the echo
  * server using stdin's "partner" watcher.
  */
@@ -261,22 +303,22 @@ stdin_cb(EV_P_ ev_io *w_, int revents)
                 } else {
 
                     /* Fatal. */
-                    log(LOG_ERR, "stdin_cb read: %m");
+                    log(LOG_ERR, "srv_read_cb read: %m");
                     exit(errno);
                 }
             } else {
                 nread += n;
                 w->timeout.last_activity = ev_now(EV_A);
-                log(LOG_DEBUG, "stdin_cb %zd bytes read", n);
+                log(LOG_DEBUG, "srv_read_cb %zd bytes read", n);
             }
         }
 
         /* Overflow - fatal. */
-        log(LOG_ERR, "stdin overflow.");
+        log(LOG_ERR, "server socket overflow.");
         exit(1);
 
     } else
-        log(LOG_WARNING, "stdin_cb spurious callback!");
+        log(LOG_WARNING, "srv_read_cb spurious callback!");
 }
 
 /*
@@ -322,6 +364,127 @@ srv_write_cb(EV_P_ ev_io *w_, int revents)
         }
     } else
         log(LOG_WARNING, "srv_write_cb spurious callback!");
+}
+
+/*
+ * Reads input from the echo server, and schedules it for writing to
+ * stdout using its "partner" stdout watcher.
+ */
+void
+srv_read_cb(EV_P_ ev_io *w_, int revents)
+{
+    log(LOG_DEBUG, "srv_read_cb called");
+
+    io_pair *w = (io_pair *) w_;
+    msg_buf *buf = w->buf;
+    
+    if (revents & EV_READ) {
+        size_t nread = 0;
+        while (ringbuf_bytes_free(&buf->rb)) {
+            ssize_t n = ringbuf_read(w->me.fd,
+                                     &buf->rb,
+                                     ringbuf_bytes_free(&buf->rb));
+            if (n == 0) {
+
+                /* EOF: stop this watcher, but drain any remaining writes. */
+                log(LOG_DEBUG, "srv_read_cb EOF received");
+                if (nread && (buf->msg_len == 0))
+                    buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
+                if (buf->msg_len)
+                    start_watcher(EV_A_ w->partner);
+                else {
+
+                    /*
+                     * Nothing left to write.
+                     *
+                     * Note: this will discard any incomplete server
+                     * messages (those without a terminating
+                     * MSG_DELIMITER), by design.
+                     */
+                    free_stdout_watcher(EV_A_ w->partner);
+                }
+                free_srv_read_watcher(EV_A_ w);
+                return;
+            } else if (n == -1) {
+                if ((errno == EAGAIN) ||
+                    (errno == EWOULDBLOCK) ||
+                    (errno == EINTR)) {
+
+                    /*
+                     * Nothing more to read for now; schedule a write
+                     * if we've received a full message and there's
+                     * not already another message to be written.
+                     */
+                    if (nread && (buf->msg_len == 0)) {
+                        buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
+                        if (buf->msg_len)
+                            start_watcher(EV_A_ w->partner);
+                    }
+                    return;
+                } else {
+
+                    /* Fatal. */
+                    log(LOG_ERR, "stdin_cb read: %m");
+                    exit(errno);
+                }
+            } else {
+                nread += n;
+                w->timeout.last_activity = ev_now(EV_A);
+                log(LOG_DEBUG, "stdin_cb %zd bytes read", n);
+            }
+        }
+
+        /* Overflow - fatal. */
+        log(LOG_ERR, "stdin overflow.");
+        exit(1);
+
+    } else
+        log(LOG_WARNING, "stdin_cb spurious callback!");
+}
+
+/*
+ * This callback is scheduled by srv_read_cb when the latter receives
+ * data from the echo server.
+ */
+void
+stdout_cb(EV_P_ ev_io *w_, int revents)
+{
+    log(LOG_DEBUG, "stdout_cb called");
+
+    io_pair *w = (io_pair *) w_;
+    msg_buf *buf = w->buf;
+
+    if (revents & EV_WRITE) {
+        while (buf->msg_len) {
+            ssize_t n = ringbuf_write(w->me.fd,
+                                      &buf->rb,
+                                      buf->msg_len);
+            if (n == -1) {
+                if ((errno == EAGAIN) ||
+                    (errno == EWOULDBLOCK) ||
+                    (errno == EINTR))
+                    break;
+                else {
+
+                    /* Fatal. */
+                    log(LOG_ERR, "stdout_cb write: %m");
+                    exit(errno);
+                }
+            } else {
+                buf->msg_len -= n;
+                w->timeout.last_activity = ev_now(EV_A);
+                log(LOG_DEBUG, "stdout_cb %zd bytes written", n);
+            }
+        }
+        if (buf->msg_len == 0) {
+
+            /* Look for more messages; stop if none. */
+            buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
+            if (buf->msg_len == 0)
+                stop_watcher(EV_A_ w);
+        }
+    } else
+        log(LOG_WARNING, "stdout_cb spurious callback!");
 }
 
 typedef void (* ev_io_cb)(EV_P_ ev_io *, int);
@@ -503,8 +666,23 @@ connect_cb(EV_P_ ev_io *w, int revents)
             exit(errno);
         }
 
-        /* Only start the stdin watcher; it gets the ball rolling. */
+        if (set_nonblocking(/* stdout */ 1) == -1) {
+            log(LOG_ERR, "connect_cb can't make stdout non-blocking: %m");
+            exit(errno);
+        }
+        io_pair *stdout_io = make_io_pair(EV_A_ /* stdout */ 1,
+                                          EV_WRITE,
+                                          stdout_cb,
+                                          w->fd,
+                                          EV_READ,
+                                          srv_read_cb);
+        if (!stdout_io) {
+            log(LOG_ERR, "make_io_pair: %m");
+            exit(errno);
+        }
+
         start_watcher(EV_A_ stdin_io);
+        start_watcher(EV_A_ stdout_io->partner); /* read from server */
 
         /* Don't need the connect watcher anymore. */
         ev_io_stop(EV_A_ w);
