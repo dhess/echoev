@@ -4,10 +4,6 @@
 
 *** Make it command line-configurable.
 
-** quit/escape sequence.
-
-*** Run shutdown(fd, SHUT_WR) on quit.
-
 ** Flag to force IPv4/IPv6 connection.
 
 ** Clean up includes.
