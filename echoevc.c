@@ -85,13 +85,13 @@ typedef struct msg_buf
     size_t msg_len;
 } msg_buf;
 
-typedef struct io_pair
+typedef struct client_watcher
 {
-    ev_io me;
+    ev_io eio;
     msg_buf *buf; /* shared with partner */
     io_timer timeout;
-    struct io_pair *partner;
-} io_pair;
+    struct client_watcher *partner;
+} client_watcher;
 
 /*
  * msg_buf's need a bit of initialization. This function does that,
@@ -140,24 +140,24 @@ echo_proto_timeout_cb(EV_P_ ev_timer *t_, int revents)
 }
 
 /*
- * Start an io_pair watcher and its protocol timer. Assumes both have
+ * Start an client_watcher and its protocol timer. Assumes both have
  * already been initialized.
  */
 void
-start_watcher(EV_P_ io_pair *w)
+start_watcher(EV_P_ client_watcher *w)
 {
-    ev_io_start(EV_A_ &w->me);
+    ev_io_start(EV_A_ &w->eio);
     w->timeout.last_activity = ev_now(EV_A);
     echo_proto_timeout_cb(EV_A_ &w->timeout.timer, EV_TIMER);
 }
 
 /*
- * Stop an io_pair watcher and its protocol timer.
+ * Stop an client_watcher and its protocol timer.
  */
 void
-stop_watcher(EV_P_ io_pair *w)
+stop_watcher(EV_P_ client_watcher *w)
 {
-    ev_io_stop(EV_A_ &w->me);
+    ev_io_stop(EV_A_ &w->eio);
     ev_timer_stop(EV_A_ &w->timeout.timer);
 }
 
@@ -169,11 +169,11 @@ stop_watcher(EV_P_ io_pair *w)
  * shares with its partner, because the partner may still need it.
  */
 void
-free_stdin_watcher(EV_P_ io_pair *w)
+free_stdin_watcher(EV_P_ client_watcher *w)
 {
     log(LOG_DEBUG, "Freeing stdin watcher.");
     stop_watcher(EV_A_ w);
-    close(w->me.fd); /* stdin */
+    close(w->eio.fd); /* stdin */
     free(w);
 }
 
@@ -188,13 +188,13 @@ free_stdin_watcher(EV_P_ io_pair *w)
  * i.e., you must stop the stdin watcher, as well.
  */
 void
-free_srv_write_watcher(EV_P_ io_pair *w)
+free_srv_write_watcher(EV_P_ client_watcher *w)
 {
     log(LOG_DEBUG, "Freeing server write watcher.");
     stop_watcher(EV_A_ w);
 
     /* *Don't* close the file descriptor here, just want a half-close. */
-    if (shutdown(w->me.fd, SHUT_WR) == -1) {
+    if (shutdown(w->eio.fd, SHUT_WR) == -1) {
         log(LOG_ERR, "free_srv_write_watcher shutdown: %m");
         exit(errno);
     }
@@ -217,11 +217,11 @@ free_srv_write_watcher(EV_P_ io_pair *w)
  * can no longer call write_cb.
  */
 void
-free_srv_read_watcher(EV_P_ io_pair *w)
+free_srv_read_watcher(EV_P_ client_watcher *w)
 {
     log(LOG_DEBUG, "Freeing server read watcher.");
     stop_watcher(EV_A_ w);
-    close(w->me.fd); /* echo server socket */
+    close(w->eio.fd); /* echo server socket */
     free(w);
 }
 
@@ -236,11 +236,11 @@ free_srv_read_watcher(EV_P_ io_pair *w)
  * well.
  */
 void
-free_stdout_watcher(EV_P_ io_pair *w)
+free_stdout_watcher(EV_P_ client_watcher *w)
 {
     log(LOG_DEBUG, "Freeing stdout watcher.");
     stop_watcher(EV_A_ w);
-    close(w->me.fd); /* stdout */
+    close(w->eio.fd); /* stdout */
     free_msg_buf(w->buf);
     free(w);
 }
@@ -254,13 +254,13 @@ stdin_cb(EV_P_ ev_io *w_, int revents)
 {
     log(LOG_DEBUG, "stdin_cb called");
 
-    io_pair *w = (io_pair *) w_;
+    client_watcher *w = (client_watcher *) w_;
     msg_buf *buf = w->buf;
     
     if (revents & EV_READ) {
         size_t nread = 0;
         while (ringbuf_bytes_free(&buf->rb)) {
-            ssize_t n = ringbuf_read(w->me.fd,
+            ssize_t n = ringbuf_read(w->eio.fd,
                                      &buf->rb,
                                      ringbuf_bytes_free(&buf->rb));
             if (n == 0) {
@@ -330,13 +330,13 @@ srv_read_cb(EV_P_ ev_io *w_, int revents)
 {
     log(LOG_DEBUG, "srv_read_cb called");
 
-    io_pair *w = (io_pair *) w_;
+    client_watcher *w = (client_watcher *) w_;
     msg_buf *buf = w->buf;
     
     if (revents & EV_READ) {
         size_t nread = 0;
         while (ringbuf_bytes_free(&buf->rb)) {
-            ssize_t n = ringbuf_read(w->me.fd,
+            ssize_t n = ringbuf_read(w->eio.fd,
                                      &buf->rb,
                                      ringbuf_bytes_free(&buf->rb));
             if (n == 0) {
@@ -406,12 +406,12 @@ write_cb(EV_P_ ev_io *w_, int revents)
 {
     log(LOG_DEBUG, "write_cb called");
 
-    io_pair *w = (io_pair *) w_;
+    client_watcher *w = (client_watcher *) w_;
     msg_buf *buf = w->buf;
 
     if (revents & EV_WRITE) {
         while (buf->msg_len) {
-            ssize_t n = ringbuf_write(w->me.fd,
+            ssize_t n = ringbuf_write(w->eio.fd,
                                       &buf->rb,
                                       buf->msg_len);
             if (n == -1) {
@@ -485,18 +485,18 @@ typedef void (* ev_io_cb)(EV_P_ ev_io *, int);
  * Returns 0 if one or more of the structures can't be allocated, in
  * which case the error is left in errno.
  */
-io_pair *
-make_io_pair(EV_P_ int std_fd,
-             int std_revents,
-             ev_io_cb std_cb,
-             int net_fd,
-             int net_revents,
-             ev_io_cb net_cb)
+client_watcher *
+make_client_watcher(EV_P_ int std_fd,
+                    int std_revents,
+                    ev_io_cb std_cb,
+                    int net_fd,
+                    int net_revents,
+                    ev_io_cb net_cb)
 {
-    io_pair *std_io = malloc(sizeof(io_pair));
+    client_watcher *std_io = malloc(sizeof(client_watcher));
     if (!std_io)
         return 0;
-    io_pair *net_io = malloc(sizeof(io_pair));
+    client_watcher *net_io = malloc(sizeof(client_watcher));
     if (!net_io)
         goto err_net_io;
     msg_buf *buf = new_msg_buf();
@@ -507,9 +507,9 @@ make_io_pair(EV_P_ int std_fd,
     net_io->buf = buf;
     net_io->partner = std_io;
         
-    ev_io_init(&std_io->me, std_cb, std_fd, std_revents);
+    ev_io_init(&std_io->eio, std_cb, std_fd, std_revents);
     ev_init(&std_io->timeout.timer, echo_proto_timeout_cb);
-    ev_io_init(&net_io->me, net_cb, net_fd, net_revents);
+    ev_io_init(&net_io->eio, net_cb, net_fd, net_revents);
     ev_init(&net_io->timeout.timer, echo_proto_timeout_cb);
     return std_io;
 
@@ -613,14 +613,14 @@ connect_cb(EV_P_ ev_io *w, int revents)
             log(LOG_ERR, "connect_cb can't make stdin non-blocking: %m");
             exit(errno);
         }
-        io_pair *stdin_io = make_io_pair(EV_A_ /* stdin */ 0,
-                                         EV_READ,
-                                         stdin_cb,
-                                         w->fd,
-                                         EV_WRITE,
-                                         write_cb);
+        client_watcher *stdin_io = make_client_watcher(EV_A_ /* stdin */ 0,
+                                                       EV_READ,
+                                                       stdin_cb,
+                                                       w->fd,
+                                                       EV_WRITE,
+                                                       write_cb);
         if (!stdin_io) {
-            log(LOG_ERR, "make_io_pair: %m");
+            log(LOG_ERR, "make_client_watcher: %m");
             exit(errno);
         }
 
@@ -628,14 +628,14 @@ connect_cb(EV_P_ ev_io *w, int revents)
             log(LOG_ERR, "connect_cb can't make stdout non-blocking: %m");
             exit(errno);
         }
-        io_pair *stdout_io = make_io_pair(EV_A_ /* stdout */ 1,
-                                          EV_WRITE,
-                                          write_cb,
-                                          w->fd,
-                                          EV_READ,
-                                          srv_read_cb);
+        client_watcher *stdout_io = make_client_watcher(EV_A_ /* stdout */ 1,
+                                                        EV_WRITE,
+                                                        write_cb,
+                                                        w->fd,
+                                                        EV_READ,
+                                                        srv_read_cb);
         if (!stdout_io) {
-            log(LOG_ERR, "make_io_pair: %m");
+            log(LOG_ERR, "make_client_watcher: %m");
             exit(errno);
         }
 
