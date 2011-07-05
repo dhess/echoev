@@ -214,7 +214,7 @@ free_srv_write_watcher(EV_P_ io_pair *w)
  *
  * NB: once you call this function, you can no longer write to (or
  * read from) the echo server, as it closes the connection; i.e, you
- * can no longer call srv_write_cb.
+ * can no longer call write_cb.
  */
 void
 free_srv_read_watcher(EV_P_ io_pair *w)
@@ -322,51 +322,6 @@ stdin_cb(EV_P_ ev_io *w_, int revents)
 }
 
 /*
- * This callback is scheduled by stdin_cb when the latter decides to
- * write to the echo server data that it read from stdin.
- */
-void
-srv_write_cb(EV_P_ ev_io *w_, int revents)
-{
-    log(LOG_DEBUG, "srv_write_cb called");
-
-    io_pair *w = (io_pair *) w_;
-    msg_buf *buf = w->buf;
-
-    if (revents & EV_WRITE) {
-        while (buf->msg_len) {
-            ssize_t n = ringbuf_write(w->me.fd,
-                                      &buf->rb,
-                                      buf->msg_len);
-            if (n == -1) {
-                if ((errno == EAGAIN) ||
-                    (errno == EWOULDBLOCK) ||
-                    (errno == EINTR))
-                    break;
-                else {
-
-                    /* Fatal. */
-                    log(LOG_ERR, "srv_write_cb write: %m");
-                    exit(errno);
-                }
-            } else {
-                buf->msg_len -= n;
-                w->timeout.last_activity = ev_now(EV_A);
-                log(LOG_DEBUG, "srv_write_cb %zd bytes written", n);
-            }
-        }
-        if (buf->msg_len == 0) {
-
-            /* Look for more messages; stop if none. */
-            buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
-            if (buf->msg_len == 0)
-                stop_watcher(EV_A_ w);
-        }
-    } else
-        log(LOG_WARNING, "srv_write_cb spurious callback!");
-}
-
-/*
  * Reads input from the echo server, and schedules it for writing to
  * stdout using its "partner" stdout watcher.
  */
@@ -443,13 +398,13 @@ srv_read_cb(EV_P_ ev_io *w_, int revents)
 }
 
 /*
- * This callback is scheduled by srv_read_cb when the latter receives
- * data from the echo server.
+ * This callback is scheduled by reading watchers when they receive
+ * data for writing.
  */
 void
-stdout_cb(EV_P_ ev_io *w_, int revents)
+write_cb(EV_P_ ev_io *w_, int revents)
 {
-    log(LOG_DEBUG, "stdout_cb called");
+    log(LOG_DEBUG, "write_cb called");
 
     io_pair *w = (io_pair *) w_;
     msg_buf *buf = w->buf;
@@ -467,13 +422,16 @@ stdout_cb(EV_P_ ev_io *w_, int revents)
                 else {
 
                     /* Fatal. */
-                    log(LOG_ERR, "stdout_cb write: %m");
+                    log(LOG_ERR, "write_cb write on fd %d: %m", w_->fd);
                     exit(errno);
                 }
             } else {
                 buf->msg_len -= n;
                 w->timeout.last_activity = ev_now(EV_A);
-                log(LOG_DEBUG, "stdout_cb %zd bytes written", n);
+                log(LOG_DEBUG,
+                    "write_cb %zd bytes written to fd %d",
+                    n,
+                    w_->fd);
             }
         }
         if (buf->msg_len == 0) {
@@ -484,7 +442,7 @@ stdout_cb(EV_P_ ev_io *w_, int revents)
                 stop_watcher(EV_A_ w);
         }
     } else
-        log(LOG_WARNING, "stdout_cb spurious callback!");
+        log(LOG_WARNING, "write_cb spurious callback on fd %d!", w_->fd);
 }
 
 typedef void (* ev_io_cb)(EV_P_ ev_io *, int);
@@ -660,7 +618,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
                                          stdin_cb,
                                          w->fd,
                                          EV_WRITE,
-                                         srv_write_cb);
+                                         write_cb);
         if (!stdin_io) {
             log(LOG_ERR, "make_io_pair: %m");
             exit(errno);
@@ -672,7 +630,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
         }
         io_pair *stdout_io = make_io_pair(EV_A_ /* stdout */ 1,
                                           EV_WRITE,
-                                          stdout_cb,
+                                          write_cb,
                                           w->fd,
                                           EV_READ,
                                           srv_read_cb);
