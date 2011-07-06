@@ -167,18 +167,23 @@ stop_watcher(EV_P_ client_watcher *w)
 }
 
 /*
- * Call this function when you're done reading from stdin, and you
- * want to clean up after the stdin watcher.
+ * Destructor for client read watchers.
  *
- * This function does *not* free the msg_buf that the stdin watcher
- * shares with its partner, because the partner may still need it.
+ * This function does *not* free the msg_buf that the watcher shares
+ * with its client write partner, because the writer may still need
+ * it.
+ *
+ * N.B.: This function closes the watcher's file descriptor, so if
+ * this client watcher shares a file descriptor with another watcher
+ * (e.g., the echo server file descriptor), you may not communicate on
+ * that file descriptor after calling this function!
  */
 void
-free_stdin_watcher(EV_P_ client_watcher *w)
+free_read_watcher(EV_P_ client_watcher *w)
 {
-    log(LOG_DEBUG, "Freeing stdin watcher.");
+    log(LOG_DEBUG, "Freeing client watcher on fd %d.", w->eio.fd);
     stop_watcher(EV_A_ w);
-    close(w->eio.fd); /* stdin */
+    close(w->eio.fd);
     free(w);
 }
 
@@ -205,28 +210,6 @@ free_srv_write_watcher(EV_P_ client_watcher *w)
     }
 
     free_msg_buf(w->buf);
-    free(w);
-}
-
-/*
- * Call this function when you're done reading from the echo server,
- * and you want to clean up after the echo server read watcher. It
- * also closes the echo server socket.
- *
- * This function does *not* free the msg_buf that the echo server read
- * watcher shares with its partner (the stdout writer), because the
- * partner may still need it.
- *
- * NB: once you call this function, you can no longer write to (or
- * read from) the echo server, as it closes the connection; i.e, you
- * can no longer call write_cb.
- */
-void
-free_srv_read_watcher(EV_P_ client_watcher *w)
-{
-    log(LOG_DEBUG, "Freeing server read watcher.");
-    stop_watcher(EV_A_ w);
-    close(w->eio.fd); /* echo server socket */
     free(w);
 }
 
@@ -553,7 +536,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
         client_watcher *stdin_io = make_client_watcher(EV_A_ /* stdin */ 0,
                                                        EV_READ,
                                                        read_cb,
-                                                       free_stdin_watcher,
+                                                       free_read_watcher,
                                                        w->fd,
                                                        EV_WRITE,
                                                        write_cb,
@@ -574,7 +557,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
                                                         w->fd,
                                                         EV_READ,
                                                         read_cb,
-                                                        free_srv_read_watcher);
+                                                        free_read_watcher);
         if (!stdout_io) {
             log(LOG_ERR, "make_client_watcher: %m");
             exit(errno);
