@@ -1,9 +1,5 @@
 * Write a client.
 
-** Install connect timeout.
-
-*** Make it command line-configurable.
-
 ** Handle server early EOF properly.
 
 *** by exiting? or at least ensuring srv_write_cb isn't called anymore.
