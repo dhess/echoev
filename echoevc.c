@@ -594,7 +594,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
 }
 
 ev_io *
-make_connector(const struct sockaddr *addr, socklen_t addr_len)
+new_connector(const struct sockaddr *addr, socklen_t addr_len)
 {
     int fd = initiate_connection(addr, addr_len);
     if (fd == -1)
@@ -720,7 +720,7 @@ main(int argc, char *argv[])
     }
 
     /* XXX dhess - cycle through connections until one works. */
-    ev_io *io = make_connector(res->ai_addr, res->ai_addrlen);
+    ev_io *io = new_connector(res->ai_addr, res->ai_addrlen);
     if (io) {
         log(LOG_NOTICE, "Trying connection to %s...", hostname);
         ev_io_start(loop, io);
