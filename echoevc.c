@@ -168,6 +168,22 @@ echo_proto_timeout_cb(EV_P_ ev_timer *t_, int revents)
 }
 
 /*
+ * "Unplug" this client_watcher from its partner. Do this when done
+ * reading, but there may be outstanding writes to perform.
+ */
+void
+unplug_from_partner(client_watcher *w)
+{
+    w->partner->partner = 0;
+}
+
+bool
+partner_is_unplugged(client_watcher *w)
+{
+    return !w->partner;
+}
+ 
+/*
  * Start an client_watcher and its protocol timer (if
  * applicable). Assumes both have already been initialized.
  */
@@ -284,6 +300,8 @@ read_cb(EV_P_ ev_io *w_, int revents)
                  * writes.
                  */
                 log(LOG_DEBUG, "read_cb EOF received on fd %d", w_->fd);
+
+                unplug_from_partner(w);
                 if (nread && (buf->msg_len == 0))
                     buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
                 if (buf->msg_len)
@@ -380,10 +398,16 @@ write_cb(EV_P_ ev_io *w_, int revents)
         }
         if (buf->msg_len == 0) {
 
-            /* Look for more messages; stop if none. */
+            /* Look for more messages; stop/destroy if none. */
             buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
-            if (buf->msg_len == 0)
-                stop_watcher(EV_A_ w);
+            if (buf->msg_len == 0) {
+                if (partner_is_unplugged(w))
+
+                    /* No more work for this pair; clean up. */
+                    w->destructor(EV_A_ w);
+                else
+                    stop_watcher(EV_A_ w);
+            }
         }
     } else
         log(LOG_WARNING, "write_cb spurious callback on fd %d!", w_->fd);
