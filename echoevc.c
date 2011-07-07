@@ -68,11 +68,11 @@ next_msg_len(const ringbuf_t *rb, char delimiter)
         return 0;
 }
 
-typedef struct io_timer
+typedef struct timeout_timer
 {
     ev_timer timer;
     ev_tstamp last_activity;
-} io_timer;
+} timeout_timer;
 
 /*
  * Each pair of watchers (stdin/srv_write, stdout/srv_read) share a
@@ -93,7 +93,7 @@ typedef struct client_watcher
 {
     ev_io eio;
     msg_buf *buf; /* shared with partner */
-    io_timer timeout;
+    timeout_timer timeout;
     struct client_watcher *partner;
     client_watcher_destructor destructor;
 } client_watcher;
@@ -127,7 +127,7 @@ static const ev_tstamp ECHO_PROTO_TIMEOUT = 10.0;
 void
 echo_proto_timeout_cb(EV_P_ ev_timer *t_, int revents)
 {
-    io_timer *t = (io_timer *) t_;
+    timeout_timer *t = (timeout_timer *) t_;
 
     ev_tstamp now = ev_now(EV_A);
     ev_tstamp timeout = t->last_activity + ECHO_PROTO_TIMEOUT;
