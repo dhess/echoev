@@ -142,7 +142,7 @@ free_msg_buf(msg_buf *buf)
 }
 
 /* Default protocol timeout, in seconds. */
-static const ev_tstamp ECHO_PROTO_TIMEOUT = 10.0;
+static const ev_tstamp ECHO_PROTO_TIMEOUT = 120.0;
 
 /*
  * Handles timeouts on established connections.
