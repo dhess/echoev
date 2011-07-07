@@ -85,6 +85,29 @@ typedef struct msg_buf
     size_t msg_len;
 } msg_buf;
 
+/*
+ * A client_watcher and its libev callback is reponsible for
+ * implementing exactly one part of the echo client protocol. For any
+ * given connection to an echo server, there will be 4 client_watcher
+ * instances: one to read the client's input on stdin, one to write
+ * the stdin data to the echo server socket, one to read the echoed
+ * data back from the echo server on the echo server socket, and one
+ * to write the echoed data on stdout.
+ *
+ * The 4 client watchers are organized by the client program into 2
+ * pairs: one pair for stdin and writing to the echo server, and one
+ * pair for reading from the echo server and writing to stdout. Each
+ * pair shares a ring buffer via the msg_buf structure; the ring
+ * buffer enforces the FIFO nature of the echo protocol. The "partner"
+ * member of the client_watcher data structure points to the watcher's
+ * pair partner.
+ *
+ * As the C language has no support for garbage collection or
+ * reference counting, the shared msg_buf struct for each pair must be
+ * freed (via the free_msg_buf function) when it's no longer
+ * needed. Note that it's always the watcher that's performing writes
+ * for a given pair that's responsible for freeing the msg_buf.
+ */
 typedef struct client_watcher *client_watcher_p;
 
 typedef void (* client_watcher_destructor)(EV_P_ client_watcher_p);
@@ -93,7 +116,7 @@ typedef struct client_watcher
 {
     ev_io eio;
     msg_buf *buf; /* shared with partner */
-    timeout_timer timeout;
+    timeout_timer *timeout;
     struct client_watcher *partner;
     client_watcher_destructor destructor;
 } client_watcher;
@@ -145,25 +168,28 @@ echo_proto_timeout_cb(EV_P_ ev_timer *t_, int revents)
 }
 
 /*
- * Start an client_watcher and its protocol timer. Assumes both have
- * already been initialized.
+ * Start an client_watcher and its protocol timer (if
+ * applicable). Assumes both have already been initialized.
  */
 void
 start_watcher(EV_P_ client_watcher *w)
 {
     ev_io_start(EV_A_ &w->eio);
-    w->timeout.last_activity = ev_now(EV_A);
-    echo_proto_timeout_cb(EV_A_ &w->timeout.timer, EV_TIMER);
+    if (w->timeout) {
+        w->timeout->last_activity = ev_now(EV_A);
+        echo_proto_timeout_cb(EV_A_ &w->timeout->timer, EV_TIMER);
+    }
 }
 
 /*
- * Stop an client_watcher and its protocol timer.
+ * Stop an client_watcher and its protocol timer (if applicable).
  */
 void
 stop_watcher(EV_P_ client_watcher *w)
 {
     ev_io_stop(EV_A_ &w->eio);
-    ev_timer_stop(EV_A_ &w->timeout.timer);
+    if (w->timeout)
+        ev_timer_stop(EV_A_ &w->timeout->timer);
 }
 
 /*
@@ -173,10 +199,10 @@ stop_watcher(EV_P_ client_watcher *w)
  * with its client write partner, because the writer may still need
  * it.
  *
- * N.B.: This function closes the watcher's file descriptor, so if
- * this client watcher shares a file descriptor with another watcher
- * (e.g., the echo server file descriptor), you may not communicate on
- * that file descriptor after calling this function!
+ * NB: This function closes the watcher's file descriptor, so if this
+ * client watcher shares a file descriptor with another watcher (e.g.,
+ * the echo server file descriptor), you may not communicate on that
+ * file descriptor after calling this function!
  */
 void
 free_read_watcher(EV_P_ client_watcher *w)
@@ -300,7 +326,8 @@ read_cb(EV_P_ ev_io *w_, int revents)
                 }
             } else {
                 nread += n;
-                w->timeout.last_activity = ev_now(EV_A);
+                if (w->timeout)
+                    w->timeout->last_activity = ev_now(EV_A);
                 log(LOG_DEBUG, "read_cb %zd bytes read on fd %d", n, w_->fd);
             }
         }
@@ -343,7 +370,8 @@ write_cb(EV_P_ ev_io *w_, int revents)
                 }
             } else {
                 buf->msg_len -= n;
-                w->timeout.last_activity = ev_now(EV_A);
+                if (w->timeout)
+                    w->timeout->last_activity = ev_now(EV_A);
                 log(LOG_DEBUG,
                     "write_cb %zd bytes written to fd %d",
                     n,
@@ -362,82 +390,48 @@ write_cb(EV_P_ ev_io *w_, int revents)
 }
 
 typedef void (* ev_io_cb)(EV_P_ ev_io *, int);
+typedef void (* ev_timer_cb)(EV_P_ ev_timer *, int);
 
 /*
- * Create a pair of libev ev_io watchers and support structures: one
- * is a stdio socket (typically either stdin or stdout), and one is a
- * network socket whose (already connected) remote endpoint is an echo
- * server. The two watchers work in concert, via their callbacks and a
- * shared ring buffer, either to send data from the client to the
- * server by reading from stdin and writing to the network socket; or
- * to read echoed data back from the server by reading from the
- * network socket and writing to stdout.
+ * Create and initialize a client_watcher, using the provided file
+ * descriptor, libev event mask, libev callback, msg_buf pointer, and
+ * destructor. The function will also create and initialize a timeout
+ * timer for the watcher, if timeout_callback is non-NULL.
  *
- * This function creates the new watchers, initializes them, and
- * initializes (but does not start) their protocol timeout timers. It
- * is agnostic about the watchers' behaviors, so it works for either
- * case. It does *not* start either watcher: this is the
- * responsibility of the caller, as which one must be started depends
- * on which pair is being created.
+ * Returns 0 if any of the structures cannot be allocated, in which
+ * case the error is left in errno.
  *
- * The pair of watchers shares a msg_buf structure, which contains a
- * ring buffer and a message length count. As the C language has no
- * support for garbage collection or reference counting, the shared
- * msg_buf struct must be freed (via the free_msg_buf function) when
- * it's no longer needed. Be careful not to free it twice, nor to free
- * it too early -- for example, when stdin receives an EOF (hence, the
- * stdin watcher is stopped) but there are still bytes in the ring
- * buffer to be written to the server.
- *
- * Because the C language lacks support for multiple return values,
- * this function always returns a pointer to the newly created stdio
- * watcher; you can get its network watcher "partner" via the partner
- * pointer.
- *
- * NOTE: assumes that both std_fd and net_fd have been made
- * non-blocking! The echo client won't function properly if either
- * socket is blocking.
- *
- * Returns 0 if one or more of the structures can't be allocated, in
- * which case the error is left in errno.
+ * N.B.: This function does not set the client_watcher's partner
+ * pointer; because of the circular dependency between a pair of
+ * client_watcher structs, it must be set by the caller.
  */
 client_watcher *
-make_client_watcher(EV_P_ int std_fd,
-                    int std_revents,
-                    ev_io_cb std_cb,
-                    client_watcher_destructor std_destructor,
-                    int net_fd,
-                    int net_revents,
-                    ev_io_cb net_cb,
-                    client_watcher_destructor net_destructor)
+new_client_watcher(int fd,
+                   int revents,
+                   ev_io_cb callback,
+                   ev_timer_cb timeout_callback,
+                   msg_buf *buf,
+                   client_watcher_destructor destructor)
 {
-    client_watcher *std_io = malloc(sizeof(client_watcher));
-    if (!std_io)
+    client_watcher *w = malloc(sizeof(client_watcher));
+    if (!w)
         return 0;
-    client_watcher *net_io = malloc(sizeof(client_watcher));
-    if (!net_io)
-        goto err_net_io;
-    msg_buf *buf = new_msg_buf();
-    if (!buf)
-        goto err_buf_io;
-    std_io->buf = buf;
-    std_io->partner = net_io;
-    std_io->destructor = std_destructor;
-    net_io->buf = buf;
-    net_io->partner = std_io;
-    net_io->destructor = net_destructor;
+    if (timeout_callback) {
+        w->timeout = malloc(sizeof(timeout_timer));
+        if (!w->timeout) {
+            free(w);
+            return 0;
+        }
+    } else
+        w->timeout = 0;
+    w->buf = buf;
+    w->partner = 0;
+    w->destructor = destructor;
         
-    ev_io_init(&std_io->eio, std_cb, std_fd, std_revents);
-    ev_init(&std_io->timeout.timer, echo_proto_timeout_cb);
-    ev_io_init(&net_io->eio, net_cb, net_fd, net_revents);
-    ev_init(&net_io->timeout.timer, echo_proto_timeout_cb);
-    return std_io;
-
-  err_buf_io:
-    free(net_io);
-  err_net_io:
-    free(std_io);
-    return 0;
+    ev_io_init(&w->eio, callback, fd, revents);
+    if (w->timeout)
+        ev_init(&w->timeout->timer, timeout_callback);
+    return w;
 }
 
 /*
@@ -529,42 +523,67 @@ connect_cb(EV_P_ ev_io *w, int revents)
             
         log(LOG_NOTICE, "Connected.");
 
+        /*
+         * Hook up all the watchers, msg_bufs, timeouts, and
+         * callbacks.
+         */
         if (set_nonblocking(/* stdin */ 0) == -1) {
             log(LOG_ERR, "connect_cb can't make stdin non-blocking: %m");
             exit(errno);
         }
-        client_watcher *stdin_io = make_client_watcher(EV_A_ /* stdin */ 0,
-                                                       EV_READ,
-                                                       read_cb,
-                                                       free_read_watcher,
-                                                       w->fd,
-                                                       EV_WRITE,
-                                                       write_cb,
-                                                       free_srv_write_watcher);
-        if (!stdin_io) {
-            log(LOG_ERR, "make_client_watcher: %m");
-            exit(errno);
-        }
-
         if (set_nonblocking(/* stdout */ 1) == -1) {
             log(LOG_ERR, "connect_cb can't make stdout non-blocking: %m");
             exit(errno);
         }
-        client_watcher *stdout_io = make_client_watcher(EV_A_ /* stdout */ 1,
-                                                        EV_WRITE,
-                                                        write_cb,
-                                                        free_stdout_watcher,
-                                                        w->fd,
-                                                        EV_READ,
-                                                        read_cb,
-                                                        free_read_watcher);
-        if (!stdout_io) {
-            log(LOG_ERR, "make_client_watcher: %m");
+        msg_buf *stdin_buf = new_msg_buf();
+        msg_buf *stdout_buf = new_msg_buf();
+        if (!stdin_buf || !stdout_buf) {
+            log(LOG_ERR, "connect_cb can't create message buffers: %m");
+            exit(errno);
+        }
+        client_watcher *stdin_io = new_client_watcher(/* stdin */ 0,
+                                                      EV_READ,
+                                                      read_cb,
+                                                      echo_proto_timeout_cb,
+                                                      stdin_buf,
+                                                      free_read_watcher);
+        client_watcher *srv_write_io = new_client_watcher(w->fd,
+                                                          EV_WRITE,
+                                                          write_cb,
+                                                          echo_proto_timeout_cb,
+                                                          stdin_buf,
+                                                          free_srv_write_watcher);
+        client_watcher *srv_read_io = new_client_watcher(w->fd,
+                                                         EV_READ,
+                                                         read_cb,
+                                                         echo_proto_timeout_cb,
+                                                         stdout_buf,
+                                                         free_read_watcher);
+
+        /* Note: don't use a timeout on stdout: blocking is OK. */
+        client_watcher *stdout_io = new_client_watcher(/* stdout */ 1,
+                                                       EV_WRITE,
+                                                       write_cb,
+                                                       0,
+                                                       stdout_buf,
+                                                       free_stdout_watcher);
+        if (!stdin_io || !srv_write_io || !srv_read_io || !stdout_io) {
+            log(LOG_ERR, "connect_cb can't create client watcher: %m");
             exit(errno);
         }
 
+        stdin_io->partner = srv_write_io;
+        srv_write_io->partner = stdin_io;
+
+        srv_read_io->partner = stdout_io;
+        stdout_io->partner = srv_read_io;
+        
+        /*
+         * Start only the reading watchers; nothing to write until we
+         * get something from stdin or the echo server.
+         */
         start_watcher(EV_A_ stdin_io);
-        start_watcher(EV_A_ stdout_io->partner); /* read from server */
+        start_watcher(EV_A_ srv_read_io);
 
         /* Don't need the connect watcher anymore. */
         ev_io_stop(EV_A_ w);
