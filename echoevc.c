@@ -502,7 +502,7 @@ initiate_connection(const struct sockaddr *addr, socklen_t addr_len)
 /*
  * This callback exists merely to indicate when the non-blocking
  * connection attempt has succeeded, so that the echo protocol
- * callback can be installed.
+ * callbacks can be installed.
  */
 void
 connect_cb(EV_P_ ev_io *w, int revents)
