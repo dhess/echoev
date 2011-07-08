@@ -6,8 +6,6 @@
 
 ** Clean up includes.
 
-** Cycle through getaddrinfo results until one connects.
-
 ** Handle "odd" UNPv1e3 and libev client cases gracefully.
 
 ** Configurable logging prefixes.

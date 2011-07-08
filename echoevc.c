@@ -55,6 +55,26 @@ const char MSG_DELIMITER = '\n';
 static syslog_fun log;
 static setlogmask_fun logmask;
 
+static void
+log_with_addr(int priority,
+              const char *fmt,
+              const struct sockaddr *addr,
+              socklen_t size)
+{
+    char host[NI_MAXHOST];
+    int err = getnameinfo((const struct sockaddr *) addr,
+                          size,
+                          host,
+                          sizeof(host),
+                          0,
+                          0,
+                          NI_NUMERICHOST);
+    if (err)
+        log(LOG_ERR, "log_with_addr getnameinfo: %s", gai_strerror(err));
+    else
+        log(priority, fmt, host);
+}
+
 /*
  * Returns 0 if no full message yet received.
  */
@@ -401,6 +421,13 @@ set_nonblocking(int fd)
     return 0;
 }
 
+typedef struct connect_watcher
+{
+    ev_io eio;
+    struct addrinfo *addr; /* addrinfo for this connection. */
+    struct addrinfo *addr_base; /* The base of the addrinfo list. */
+} connect_watcher;
+
 /*
  * Initiate a connection on a non-blocking socket using the given
  * socket address.
@@ -438,6 +465,9 @@ initiate_connection(const struct sockaddr *addr, socklen_t addr_len)
     return -1;
 }
 
+connect_watcher *
+new_connector(struct addrinfo *addr, struct addrinfo *addr_base);
+
 /*
  * This callback exists merely to indicate when the non-blocking
  * connection attempt has succeeded, so that the echo protocol
@@ -448,6 +478,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
 {
     log(LOG_DEBUG, "connect_cb called");
 
+    connect_watcher *c = (connect_watcher *) w;
     if (revents & EV_WRITE) {
 
         /*
@@ -458,14 +489,47 @@ connect_cb(EV_P_ ev_io *w, int revents)
         socklen_t optlen;
         optlen = sizeof(optval);
         if (getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) {
+
+            /* Fatal. */
             log(LOG_ERR, "connect_cb getsockopt: %m");
+            freeaddrinfo(c->addr_base);
+            free(c);
             exit(errno);
         }
         if (optval != 0) {
+
+            /* Connection failed; try the next address in the list. */
             log(LOG_ERR, "Connection failed: %s", strerror(optval));
-            exit(optval);
+            ev_io_stop(EV_A_ w);
+            close(w->fd);
+
+            if (c->addr->ai_next) {
+                connect_watcher *cnext = new_connector(c->addr->ai_next,
+                                                       c->addr_base);
+                if (cnext) {
+                    log_with_addr(LOG_NOTICE,
+                                  "Trying connection to %s...",
+                                  cnext->addr->ai_addr,
+                                  cnext->addr->ai_addrlen);
+                    ev_io_start(EV_A_ &cnext->eio);
+                    free(c);
+                    return;
+                } else {
+
+                    /* Fatal. */
+                    freeaddrinfo(c->addr_base);
+                    free(c);
+                    exit(optval);
+                }
+            } else {
+
+                /* Fatal. */
+                freeaddrinfo(c->addr_base);
+                free(c);
+                exit(optval);
+            }
         }
-            
+
         log(LOG_NOTICE, "Connected.");
 
         /*
@@ -515,23 +579,28 @@ connect_cb(EV_P_ ev_io *w, int revents)
 
         /* Don't need the connect watcher anymore. */
         ev_io_stop(EV_A_ w);
-        free(w);
+        freeaddrinfo(c->addr_base);
+        free(c);
     } else {
         log(LOG_WARNING, "connect_cb spurious callback!");
     }
 }
 
-ev_io *
-new_connector(const struct sockaddr *addr, socklen_t addr_len)
+connect_watcher *
+new_connector(struct addrinfo *addr,
+              struct addrinfo *addr_base)
 {
-    int fd = initiate_connection(addr, addr_len);
+    int fd = initiate_connection(addr->ai_addr, addr->ai_addrlen);
     if (fd == -1)
-        return NULL;
+        return 0;
 
-    ev_io *io = malloc(sizeof(ev_io));
-    if (io)
-        ev_io_init(io, connect_cb, fd, EV_WRITE);
-    return io;
+    connect_watcher *c = malloc(sizeof(connect_watcher));
+    if (c) {
+        ev_io_init(&c->eio, connect_cb, fd, EV_WRITE);
+        c->addr = addr;
+        c->addr_base = addr_base;
+    }
+    return c;
 }
 
 const char *default_portstr = "7777";
@@ -685,15 +754,16 @@ main(int argc, char *argv[])
         exit(err);
     }
 
-    /* XXX dhess - cycle through connections until one works. */
-    ev_io *io = new_connector(res->ai_addr, res->ai_addrlen);
-    if (io) {
-        log(LOG_NOTICE, "Trying connection to %s...", hostname);
-        ev_io_start(loop, io);
+    connect_watcher *c = new_connector(res, res);
+    if (c) {
+        log_with_addr(LOG_NOTICE,
+                      "Trying connection to %s...",
+                      res->ai_addr,
+                      res->ai_addrlen);
+        ev_io_start(loop, &c->eio);
     }
     else
         exit(errno);
-    freeaddrinfo(res);
 
     /* Clean up before entering ev_run loop */
     if (portstr)
