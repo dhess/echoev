@@ -10,8 +10,6 @@
 
 ** Cycle through getaddrinfo results until one connects.
 
-** Add a --numeric flag to bypass name resolution.
-
 ** Handle "odd" UNPv1e3 and libev client cases gracefully.
 
 ** Configurable logging prefixes.

@@ -542,13 +542,19 @@ usage(const char *name)
     printf("usage: %s [OPTIONS] server\n\n", name);
     printf("server can be either an IPv[46] address, or a domain name.\n\n");
     printf("Options:\n");
-    printf("  -p, --port       Remote port number to connect to [0-65535].\n");
-    printf("                   The default is 7777. Service names are\n");
-    printf("                   also acceptable.\n");
-    printf("  -l, --loglevel   Set the logging level (0-7, 0 is emergency,\n");
-    printf("                   7 is debug). The default is 3 (error).\n");
-    printf("  -h, --help       Show this message and exit\n");
-    printf("  -V, --version    Print the program version and exit\n");
+    printf("  -n, --numerichost Prevents IP address-to-name lookup when\n");
+    printf("                    server is given as an IP address.\n");
+    printf("  -p, --port        Remote port number to connect to [0-65535].\n");
+    printf("                    The default is 7777. Service names are\n");
+    printf("                    also acceptable, unless --numericpport is.\n");
+    printf("                    specified.\n");
+    printf("  -N, --numericport Prevents service name-to-port number lookup\n");
+    printf("                    when remote port is specified as an\n");
+    printf("                    integer.\n");
+    printf("  -l, --loglevel    Set the logging level (0-7, 0 is emergency,\n");
+    printf("                    7 is debug). The default is 3 (error).\n");
+    printf("  -h, --help        Show this message and exit\n");
+    printf("  -V, --version     Print the program version and exit\n");
 }
 
 void
@@ -561,11 +567,13 @@ int
 main(int argc, char *argv[])
 {
     static struct option longopts[] = {
-        { "help",      no_argument,       0, 'h' },
-        { "version",   no_argument,       0, 'V' },
-        { "port",      required_argument, 0, 'p' },
-        { "loglevel",  required_argument, 0, 'l' },
-        { 0,           0,                 0,  0  }
+        { "help",        no_argument,       0, 'h' },
+        { "version",     no_argument,       0, 'V' },
+        { "numerichost", no_argument,       0, 'n' },
+        { "numericport", no_argument,       0, 'N' },
+        { "port",        required_argument, 0, 'p' },
+        { "loglevel",    required_argument, 0, 'l' },
+        { 0,             0,                 0,  0  }
     };
 
     char *progname = strdup(argv[0]);
@@ -576,8 +584,9 @@ main(int argc, char *argv[])
     
     long loglevel = LOG_ERR;
     char *portstr = 0;
+    int opt_ai_flags = 0;
     int ch;
-    while ((ch = getopt_long(argc, argv, "hVl:p:", longopts, 0)) != -1) {
+    while ((ch = getopt_long(argc, argv, "hVnNp:l:", longopts, 0)) != -1) {
         switch (ch) {
         case 'V':
             print_version(basename(progname));
@@ -597,6 +606,12 @@ main(int argc, char *argv[])
                 perror("strdup");
                 exit(errno);
             }
+            break;
+        case 'n':
+            opt_ai_flags |= AI_NUMERICHOST;
+            break;
+        case 'N':
+            opt_ai_flags |= AI_NUMERICSERV;
             break;
         case 'h':
         default:
@@ -636,7 +651,7 @@ main(int argc, char *argv[])
     memset(&hints, 0, sizeof(hints));
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    hints.ai_flags = AI_ADDRCONFIG;
+    hints.ai_flags = AI_ADDRCONFIG | opt_ai_flags;
     hints.ai_family = AF_UNSPEC;
     int err = getaddrinfo(hostname,
                           portstr ? portstr : default_portstr,
