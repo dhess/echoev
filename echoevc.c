@@ -488,7 +488,8 @@ connect_cb(EV_P_ ev_io *w, int revents)
                                                          echo_proto_timeout_cb,
                                                          shutdown_srv_writer);
 
-        /* N.B.: don't timeout on stdout, it should be allowed to
+        /*
+         * N.B.: don't timeout on stdout, it should be allowed to
          * block indefinitely.
          */
         watcher_pair *stdout_srv_read = new_watcher_pair(w->fd,
