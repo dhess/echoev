@@ -621,7 +621,7 @@ usage(const char *name)
     printf("                    when remote port is specified as an\n");
     printf("                    integer.\n");
     printf("  -l, --loglevel    Set the logging level (0-7, 0 is emergency,\n");
-    printf("                    7 is debug). The default is 3 (error).\n");
+    printf("                    7 is debug). The default is 5 (notice).\n");
     printf("  -4, --ipv4        Connect only via IPv4.\n");
     printf("  -6, --ipv6        Connect only via IPv6.\n");
     printf("  -h, --help        Show this message and exit\n");
@@ -655,7 +655,7 @@ main(int argc, char *argv[])
         exit(errno);
     }
     
-    long loglevel = LOG_ERR;
+    long loglevel = LOG_NOTICE;
     char *portstr = 0;
     int opt_ai_flags = 0;
     int opt_ai_family = AF_UNSPEC;
