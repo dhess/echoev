@@ -553,6 +553,8 @@ usage(const char *name)
     printf("                    integer.\n");
     printf("  -l, --loglevel    Set the logging level (0-7, 0 is emergency,\n");
     printf("                    7 is debug). The default is 3 (error).\n");
+    printf("  -4, --ipv4        Connect only via IPv4.\n");
+    printf("  -6, --ipv6        Connect only via IPv6.\n");
     printf("  -h, --help        Show this message and exit\n");
     printf("  -V, --version     Print the program version and exit\n");
 }
@@ -571,6 +573,8 @@ main(int argc, char *argv[])
         { "version",     no_argument,       0, 'V' },
         { "numerichost", no_argument,       0, 'n' },
         { "numericport", no_argument,       0, 'N' },
+        { "ipv4",        no_argument,       0, '4' },
+        { "ipv6",        no_argument,       0, '6' },
         { "port",        required_argument, 0, 'p' },
         { "loglevel",    required_argument, 0, 'l' },
         { 0,             0,                 0,  0  }
@@ -585,8 +589,9 @@ main(int argc, char *argv[])
     long loglevel = LOG_ERR;
     char *portstr = 0;
     int opt_ai_flags = 0;
+    int opt_ai_family = AF_UNSPEC;
     int ch;
-    while ((ch = getopt_long(argc, argv, "hVnNp:l:", longopts, 0)) != -1) {
+    while ((ch = getopt_long(argc, argv, "hVnN46p:l:", longopts, 0)) != -1) {
         switch (ch) {
         case 'V':
             print_version(basename(progname));
@@ -612,6 +617,24 @@ main(int argc, char *argv[])
             break;
         case 'N':
             opt_ai_flags |= AI_NUMERICSERV;
+            break;
+        case '4':
+            if ((opt_ai_family == AF_UNSPEC) || (opt_ai_family == AF_INET))
+                opt_ai_family = AF_INET;
+            else {
+                fprintf(stderr,
+                        "IPv4-only and IPv6-only flags are mutually exclusive.\n");
+                exit(1);
+            }
+            break;
+        case '6':
+            if ((opt_ai_family == AF_UNSPEC) || (opt_ai_family == AF_INET6))
+                opt_ai_family = AF_INET6;
+            else {
+                fprintf(stderr,
+                        "IPv4-only and IPv6-only flags are mutually exclusive.\n");
+                exit(1);
+            }
             break;
         case 'h':
         default:
@@ -652,7 +675,7 @@ main(int argc, char *argv[])
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
     hints.ai_flags = AI_ADDRCONFIG | opt_ai_flags;
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = opt_ai_family;
     int err = getaddrinfo(hostname,
                           portstr ? portstr : default_portstr,
                           &hints,
