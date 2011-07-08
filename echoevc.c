@@ -74,72 +74,51 @@ typedef struct timeout_timer
     ev_tstamp last_activity;
 } timeout_timer;
 
+typedef void (* shutdown_fn)(EV_P_ ev_io *w);
+
 /*
- * Each pair of watchers (stdin/srv_write, stdout/srv_read) share a
- * ring buffer via this structure. The last one out is responsible for
- * deallocating it.
+ * On the client side of the echo protocol, there are two pairs of
+ * ev_io watchers: one pair for reading from stdin and writing that
+ * data to the echo server, and one pair for reading the data back
+ * from the echo server and writing it to stdout. Therefore, each pair
+ * needs one reader, and one writer. The reader and writer share a
+ * single ring buffer to enforce the FIFO nature of the echo protocol.
+ *
+ * The watcher_pair struct combines the paired ev_io reader and writer
+ * with a separate timeout mechanism for each ev_io watcher; separate
+ * shutdown functions for each watcher's file descriptor; a flag to
+ * indicate that the reader half of the pair is finished with its file
+ * descriptor; and the ring buffer, plus the length of the first whole
+ * message in the ring buffer.
+
  */
-typedef struct msg_buf
+typedef struct watcher_pair
 {
-    ringbuf_t rb;
+    ev_io reader;
+    ev_io writer;
+
+    timeout_timer reader_timeout;
+    timeout_timer writer_timeout;
+
+    shutdown_fn reader_shutdown;
+    shutdown_fn writer_shutdown;
+
+    bool reader_is_finished;
+
+    /* Bytes left to be written in the current outgoing message. */
     size_t msg_len;
-} msg_buf;
+    ringbuf_t rb;
+} watcher_pair;
 
 /*
- * A client_watcher and its libev callback is reponsible for
- * implementing exactly one part of the echo client protocol. For any
- * given connection to an echo server, there will be 4 client_watcher
- * instances: one to read the client's input on stdin, one to write
- * the stdin data to the echo server socket, one to read the echoed
- * data back from the echo server on the echo server socket, and one
- * to write the echoed data on stdout.
- *
- * The 4 client watchers are organized by the client program into 2
- * pairs: one pair for stdin and writing to the echo server, and one
- * pair for reading from the echo server and writing to stdout. Each
- * pair shares a ring buffer via the msg_buf structure; the ring
- * buffer enforces the FIFO nature of the echo protocol. The "partner"
- * member of the client_watcher data structure points to the watcher's
- * pair partner.
- *
- * As the C language has no support for garbage collection or
- * reference counting, the shared msg_buf struct for each pair must be
- * freed (via the free_msg_buf function) when it's no longer
- * needed. Note that it's always the watcher that's performing writes
- * for a given pair that's responsible for freeing the msg_buf.
+ * Macros to help libev callbacks go from ev_io struct pointers back
+ * to their containing watcher_pair structs.
  */
-typedef struct client_watcher *client_watcher_p;
+#define READER_TO_WATCHER_PAIR(w) \
+    (watcher_pair *) (((void *)(w)) - offsetof(watcher_pair, reader));
 
-typedef void (* client_watcher_destructor)(EV_P_ client_watcher_p);
-
-typedef struct client_watcher
-{
-    ev_io eio;
-    msg_buf *buf; /* shared with partner */
-    timeout_timer *timeout;
-    struct client_watcher *partner;
-    client_watcher_destructor destructor;
-} client_watcher;
-
-/*
- * msg_buf's need a bit of initialization. This function does that,
- * and returns a pointer to the new msg_buf if successful, 0
- * otherwise, in which case errno contains the error.
- */
-msg_buf *
-new_msg_buf()
-{
-    msg_buf *buf = malloc(sizeof(msg_buf));
-    if (buf)
-        ringbuf_init(&buf->rb);
-    return buf;
-}
-
-void
-free_msg_buf(msg_buf *buf)
-{
-    free(buf);
-}
+#define WRITER_TO_WATCHER_PAIR(w) \
+    (watcher_pair *) (((void *)(w)) - offsetof(watcher_pair, writer));
 
 /* Default protocol timeout, in seconds. */
 static const ev_tstamp ECHO_PROTO_TIMEOUT = 120.0;
@@ -168,157 +147,113 @@ echo_proto_timeout_cb(EV_P_ ev_timer *t_, int revents)
 }
 
 /*
- * "Unplug" this client_watcher from its partner. Do this when done
- * reading, but there may be outstanding writes to perform.
+ * A do-nothing timeout handler (for stdout, which should not time
+ * out).
  */
 void
-unplug_from_partner(client_watcher *w)
+null_timeout_cb(EV_P_ ev_timer *t, int revents)
 {
-    w->partner->partner = 0;
-}
-
-bool
-partner_is_unplugged(client_watcher *w)
-{
-    return !w->partner;
-}
- 
-/*
- * Start an client_watcher and its protocol timer (if
- * applicable). Assumes both have already been initialized.
- */
-void
-start_watcher(EV_P_ client_watcher *w)
-{
-    ev_io_start(EV_A_ &w->eio);
-    if (w->timeout) {
-        w->timeout->last_activity = ev_now(EV_A);
-        echo_proto_timeout_cb(EV_A_ &w->timeout->timer, EV_TIMER);
-    }
 }
 
 /*
- * Stop an client_watcher and its protocol timer (if applicable).
+ * Start an ev_io watcher and its echo protocol timer.  Assumes both
+ * have already been initialized.
  */
 void
-stop_watcher(EV_P_ client_watcher *w)
+start_watcher(EV_P_ ev_io *w, timeout_timer *t)
 {
-    ev_io_stop(EV_A_ &w->eio);
-    if (w->timeout)
-        ev_timer_stop(EV_A_ &w->timeout->timer);
+    ev_io_start(EV_A_ w);
+    t->last_activity = ev_now(EV_A);
+    echo_proto_timeout_cb(EV_A_ &t->timer, EV_TIMER);
 }
 
 /*
- * Destructor for client read watchers.
- *
- * This function does *not* free the msg_buf that the watcher shares
- * with its client write partner, because the writer may still need
- * it.
- *
- * NB: This function closes the watcher's file descriptor, so if this
- * client watcher shares a file descriptor with another watcher (e.g.,
- * the echo server file descriptor), you may not communicate on that
- * file descriptor after calling this function!
+ * Stop an ev_io and its echo protocol timer.
  */
 void
-free_read_watcher(EV_P_ client_watcher *w)
+stop_watcher(EV_P_ ev_io *w, timeout_timer *t)
 {
-    log(LOG_DEBUG, "Freeing client watcher on fd %d.", w->eio.fd);
-    stop_watcher(EV_A_ w);
-    close(w->eio.fd);
-    free(w);
+    ev_io_stop(EV_A_ w);
+    ev_timer_stop(EV_A_ &t->timer);
 }
 
 /*
- * Call this function when you're done writing bytes to the echo
- * server, and you want to clean up after the server-writing
- * watcher. This function frees the msg_buf that the watcher shares
- * with the stdin watcher. It also shuts down writes on the echo
- * server socket.
- *
- * NB: once you call this function, you can no longer call stdin_cb;
- * i.e., you must stop the stdin watcher, as well.
+ * A special shutdown function for the echo server writer
+ * watcher. It's called when there's no more data to be written from
+ * stdin. The writer watcher must not close(2) the echo server
+ * connection, because the client might still be waiting for data to
+ * be echoed back from the echo server.
  */
 void
-free_srv_write_watcher(EV_P_ client_watcher *w)
+shutdown_srv_writer(EV_P_ ev_io *w)
 {
-    log(LOG_DEBUG, "Freeing server write watcher.");
-    stop_watcher(EV_A_ w);
-
-    /* *Don't* close the file descriptor here, just want a half-close. */
-    if (shutdown(w->eio.fd, SHUT_WR) == -1) {
-        log(LOG_ERR, "free_srv_write_watcher shutdown: %m");
+    /* Half-close. */
+    if (shutdown(w->fd, SHUT_WR) == -1) {
+        log(LOG_ERR, "shutdown_srv_writer shutdown: %m");
         exit(errno);
     }
-
-    free_msg_buf(w->buf);
-    free(w);
 }
 
 /*
- * Call this function when you're done writing to stdout, and you want
- * to clean up after the stdout watcher. This function frees the
- * msg_buf that the watcher shares with the echo server read
- * watcher. It also closes stdout.
- *
- * NB: once you call this function, you can no longer call
- * srv_read_cb; i.e., you must stop the echo server read watcher, as
- * well.
+ * The default shutdown function: just close(2) the watcher's file
+ * descriptor.
  */
 void
-free_stdout_watcher(EV_P_ client_watcher *w)
+close_watcher(EV_P_ ev_io *w)
 {
-    log(LOG_DEBUG, "Freeing stdout watcher.");
-    stop_watcher(EV_A_ w);
-    close(w->eio.fd); /* stdout */
-    free_msg_buf(w->buf);
-    free(w);
+    if (close(w->fd) == -1) {
+        log(LOG_ERR, "close_watcher close on fd %d: %m", w->fd);
+        exit(errno);
+    }
 }
 
 /*
  * Reads input from a watcher's descriptor, and schedules it for
- * writing using the watcher's "partner."
+ * writing using its paired ev_io writer.
  */
 void
-read_cb(EV_P_ ev_io *w_, int revents)
+read_cb(EV_P_ ev_io *reader, int revents)
 {
     log(LOG_DEBUG, "read_cb called");
 
-    client_watcher *w = (client_watcher *) w_;
-    msg_buf *buf = w->buf;
+    watcher_pair *p = READER_TO_WATCHER_PAIR(reader);
+    assert(reader == &p->reader);
     
     if (revents & EV_READ) {
         size_t nread = 0;
-        while (ringbuf_bytes_free(&buf->rb)) {
-            ssize_t n = ringbuf_read(w->eio.fd,
-                                     &buf->rb,
-                                     ringbuf_bytes_free(&buf->rb));
+        while (ringbuf_bytes_free(&p->rb)) {
+            ssize_t n = ringbuf_read(reader->fd,
+                                     &p->rb,
+                                     ringbuf_bytes_free(&p->rb));
             if (n == 0) {
 
                 /*
-                 * EOF: delete this watcher, but drain any remaining
+                 * EOF: shutdown this watcher, but drain any remaining
                  * writes.
                  */
-                log(LOG_DEBUG, "read_cb EOF received on fd %d", w_->fd);
+                log(LOG_DEBUG, "read_cb EOF received on fd %d", reader->fd);
 
-                unplug_from_partner(w);
-                if (nread && (buf->msg_len == 0))
-                    buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
-                if (buf->msg_len)
-                    start_watcher(EV_A_ w->partner);
+                stop_watcher(EV_A_ reader, &p->reader_timeout);
+                p->reader_shutdown(EV_A_ reader);
+                p->reader_is_finished = true;
+
+                if (nread && (p->msg_len == 0))
+                    p->msg_len = next_msg_len(&p->rb, MSG_DELIMITER);
+                if (p->msg_len)
+                    start_watcher(EV_A_ &p->writer, &p->writer_timeout);
                 else {
 
                     /*
-                     * Nothing left to write, delete the writing
-                     * partner, too.
+                     * Nothing left to write, destroy the entire pair.
                      *
                      * Note: this will discard any incomplete messages
                      * (those without a terminating MSG_DELIMITER), by
                      * design.
                      */
-                    w->partner->destructor(EV_A_ w->partner);
+                    stop_watcher(EV_A_ &p->writer, &p->writer_timeout);
+                    p->writer_shutdown(EV_A_ &p->writer);
+                    free(p);
                 }
-                w->destructor(EV_A_ w);
                 return;
             } else if (n == -1) {
                 if ((errno == EAGAIN) ||
@@ -330,32 +265,34 @@ read_cb(EV_P_ ev_io *w_, int revents)
                      * if we've received a full message and there's
                      * not already another message to be written.
                      */
-                    if (nread && (buf->msg_len == 0)) {
-                        buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
-                        if (buf->msg_len)
-                            start_watcher(EV_A_ w->partner);
+                    if (nread && (p->msg_len == 0)) {
+                        p->msg_len = next_msg_len(&p->rb, MSG_DELIMITER);
+                        if (p->msg_len)
+                            start_watcher(EV_A_ &p->writer, &p->writer_timeout);
                     }
                     return;
                 } else {
 
                     /* Fatal. */
-                    log(LOG_ERR, "read_cb read on fd %d: %m", w_->fd);
+                    log(LOG_ERR, "read_cb read on fd %d: %m", reader->fd);
                     exit(errno);
                 }
             } else {
                 nread += n;
-                if (w->timeout)
-                    w->timeout->last_activity = ev_now(EV_A);
-                log(LOG_DEBUG, "read_cb %zd bytes read on fd %d", n, w_->fd);
+                p->reader_timeout.last_activity = ev_now(EV_A);
+                log(LOG_DEBUG,
+                    "read_cb %zd bytes read on fd %d",
+                    n,
+                    reader->fd);
             }
         }
 
         /* Overflow - fatal. */
-        log(LOG_ERR, "read_cb socket overflow on fd %d.", w_->fd);
+        log(LOG_ERR, "read_cb socket overflow on fd %d.", reader->fd);
         exit(1);
 
     } else
-        log(LOG_WARNING, "read_cb spurious callback on fd %d!", w_->fd);
+        log(LOG_WARNING, "read_cb spurious callback on fd %d!", reader->fd);
 }
 
 /*
@@ -363,18 +300,18 @@ read_cb(EV_P_ ev_io *w_, int revents)
  * data for writing.
  */
 void
-write_cb(EV_P_ ev_io *w_, int revents)
+write_cb(EV_P_ ev_io *writer, int revents)
 {
     log(LOG_DEBUG, "write_cb called");
 
-    client_watcher *w = (client_watcher *) w_;
-    msg_buf *buf = w->buf;
+    watcher_pair *p = WRITER_TO_WATCHER_PAIR(writer);
+    assert(writer == &p->writer);
 
     if (revents & EV_WRITE) {
-        while (buf->msg_len) {
-            ssize_t n = ringbuf_write(w->eio.fd,
-                                      &buf->rb,
-                                      buf->msg_len);
+        while (p->msg_len) {
+            ssize_t n = ringbuf_write(writer->fd,
+                                      &p->rb,
+                                      p->msg_len);
             if (n == -1) {
                 if ((errno == EAGAIN) ||
                     (errno == EWOULDBLOCK) ||
@@ -383,79 +320,63 @@ write_cb(EV_P_ ev_io *w_, int revents)
                 else {
 
                     /* Fatal. */
-                    log(LOG_ERR, "write_cb write on fd %d: %m", w_->fd);
+                    log(LOG_ERR, "write_cb write on fd %d: %m", writer->fd);
                     exit(errno);
                 }
             } else {
-                buf->msg_len -= n;
-                if (w->timeout)
-                    w->timeout->last_activity = ev_now(EV_A);
+                p->msg_len -= n;
+                p->writer_timeout.last_activity = ev_now(EV_A);
                 log(LOG_DEBUG,
                     "write_cb %zd bytes written to fd %d",
                     n,
-                    w_->fd);
+                    writer->fd);
             }
         }
-        if (buf->msg_len == 0) {
+        if (p->msg_len == 0) {
 
-            /* Look for more messages; stop/destroy if none. */
-            buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
-            if (buf->msg_len == 0) {
-                if (partner_is_unplugged(w))
+            /* Look for more messages; stop/shutdown if none. */
+            p->msg_len = next_msg_len(&p->rb, MSG_DELIMITER);
+            if (p->msg_len == 0) {
+                stop_watcher(EV_A_ writer, &p->writer_timeout);
+                if (p->reader_is_finished) {
 
-                    /* No more work for this pair; clean up. */
-                    w->destructor(EV_A_ w);
-                else
-                    stop_watcher(EV_A_ w);
+                    /* No more work for this pair; clean it up. */
+                    p->writer_shutdown(EV_A_ &p->writer);
+                    free(p);
+                }
             }
         }
     } else
-        log(LOG_WARNING, "write_cb spurious callback on fd %d!", w_->fd);
+        log(LOG_WARNING, "write_cb spurious callback on fd %d!", writer->fd);
 }
 
-typedef void (* ev_io_cb)(EV_P_ ev_io *, int);
 typedef void (* ev_timer_cb)(EV_P_ ev_timer *, int);
 
-/*
- * Create and initialize a client_watcher, using the provided file
- * descriptor, libev event mask, libev callback, msg_buf pointer, and
- * destructor. The function will also create and initialize a timeout
- * timer for the watcher, if timeout_callback is non-NULL.
- *
- * Returns 0 if any of the structures cannot be allocated, in which
- * case the error is left in errno.
- *
- * N.B.: This function does not set the client_watcher's partner
- * pointer; because of the circular dependency between a pair of
- * client_watcher structs, it must be set by the caller.
- */
-client_watcher *
-new_client_watcher(int fd,
-                   int revents,
-                   ev_io_cb callback,
-                   ev_timer_cb timeout_callback,
-                   msg_buf *buf,
-                   client_watcher_destructor destructor)
+watcher_pair *
+new_watcher_pair(int reader_fd,
+                 ev_timer_cb reader_timeout_callback,
+                 shutdown_fn reader_shutdown_fn,
+                 int writer_fd,
+                 ev_timer_cb writer_timeout_callback,
+                 shutdown_fn writer_shutdown_fn)
 {
-    client_watcher *w = malloc(sizeof(client_watcher));
-    if (!w)
+    watcher_pair *pair = malloc(sizeof(watcher_pair));
+    if (!pair)
         return 0;
-    if (timeout_callback) {
-        w->timeout = malloc(sizeof(timeout_timer));
-        if (!w->timeout) {
-            free(w);
-            return 0;
-        }
-    } else
-        w->timeout = 0;
-    w->buf = buf;
-    w->partner = 0;
-    w->destructor = destructor;
-        
-    ev_io_init(&w->eio, callback, fd, revents);
-    if (w->timeout)
-        ev_init(&w->timeout->timer, timeout_callback);
-    return w;
+
+    ringbuf_init(&pair->rb);
+    pair->msg_len = 0;
+
+    pair->reader_shutdown = reader_shutdown_fn;
+    pair->writer_shutdown = writer_shutdown_fn;
+    
+    ev_io_init(&pair->reader, read_cb, reader_fd, EV_READ);
+    ev_init(&pair->reader_timeout.timer, reader_timeout_callback);
+
+    ev_io_init(&pair->writer, write_cb, writer_fd, EV_WRITE);
+    ev_init(&pair->writer_timeout.timer, writer_timeout_callback);
+
+    return pair;
 }
 
 /*
@@ -548,8 +469,8 @@ connect_cb(EV_P_ ev_io *w, int revents)
         log(LOG_NOTICE, "Connected.");
 
         /*
-         * Hook up all the watchers, msg_bufs, timeouts, and
-         * callbacks.
+         * stdin and stdout *must* be set to non-blocking in order for
+         * libev to do its thing.
          */
         if (set_nonblocking(/* stdin */ 0) == -1) {
             log(LOG_ERR, "connect_cb can't make stdin non-blocking: %m");
@@ -559,55 +480,37 @@ connect_cb(EV_P_ ev_io *w, int revents)
             log(LOG_ERR, "connect_cb can't make stdout non-blocking: %m");
             exit(errno);
         }
-        msg_buf *stdin_buf = new_msg_buf();
-        msg_buf *stdout_buf = new_msg_buf();
-        if (!stdin_buf || !stdout_buf) {
-            log(LOG_ERR, "connect_cb can't create message buffers: %m");
-            exit(errno);
-        }
-        client_watcher *stdin_io = new_client_watcher(/* stdin */ 0,
-                                                      EV_READ,
-                                                      read_cb,
-                                                      echo_proto_timeout_cb,
-                                                      stdin_buf,
-                                                      free_read_watcher);
-        client_watcher *srv_write_io = new_client_watcher(w->fd,
-                                                          EV_WRITE,
-                                                          write_cb,
-                                                          echo_proto_timeout_cb,
-                                                          stdin_buf,
-                                                          free_srv_write_watcher);
-        client_watcher *srv_read_io = new_client_watcher(w->fd,
-                                                         EV_READ,
-                                                         read_cb,
+
+        watcher_pair *stdin_srv_write = new_watcher_pair(/* stdin */ 0,
                                                          echo_proto_timeout_cb,
-                                                         stdout_buf,
-                                                         free_read_watcher);
+                                                         close_watcher,
+                                                         w->fd,
+                                                         echo_proto_timeout_cb,
+                                                         shutdown_srv_writer);
 
-        /* Note: don't use a timeout on stdout: blocking is OK. */
-        client_watcher *stdout_io = new_client_watcher(/* stdout */ 1,
-                                                       EV_WRITE,
-                                                       write_cb,
-                                                       0,
-                                                       stdout_buf,
-                                                       free_stdout_watcher);
-        if (!stdin_io || !srv_write_io || !srv_read_io || !stdout_io) {
-            log(LOG_ERR, "connect_cb can't create client watcher: %m");
+        /* N.B.: don't timeout on stdout, it should be allowed to
+         * block indefinitely.
+         */
+        watcher_pair *stdout_srv_read = new_watcher_pair(w->fd,
+                                                         echo_proto_timeout_cb,
+                                                         close_watcher,
+                                                         /* stdout */ 1,
+                                                         null_timeout_cb,
+                                                         close_watcher);
+
+        if (!stdin_srv_write || !stdout_srv_read) {
+            log(LOG_ERR, "connect_cb can't create watcher_pair: %m");
             exit(errno);
         }
 
-        stdin_io->partner = srv_write_io;
-        srv_write_io->partner = stdin_io;
-
-        srv_read_io->partner = stdout_io;
-        stdout_io->partner = srv_read_io;
-        
         /*
-         * Start only the reading watchers; nothing to write until we
-         * get something from stdin or the echo server.
+         * Start only the reading watchers; there's nothing to write
+         * until we get something from stdin or the echo server.
          */
-        start_watcher(EV_A_ stdin_io);
-        start_watcher(EV_A_ srv_read_io);
+        start_watcher(EV_A_ &stdin_srv_write->reader,
+                      &stdin_srv_write->reader_timeout);
+        start_watcher(EV_A_ &stdout_srv_read->reader,
+                      &stdout_srv_read->reader_timeout);
 
         /* Don't need the connect watcher anymore. */
         ev_io_stop(EV_A_ w);
