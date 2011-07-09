@@ -107,6 +107,13 @@ msg_buf_init(msg_buf *buf)
     buf->msg_len = 0;
 }
 
+/*
+ * client_session contains the entirety of the connection state to an
+ * echo server, including all the libev ev_io watchers needed to
+ * interact with the client's stdin, stdout, and the echo server; the
+ * timeout trackers; and two msg_buf structures for enforcing the
+ * FIFO, message-oriented nature of the echo protocol.
+ */
 typedef struct client_session
 {
     ev_io stdin_io;
@@ -224,12 +231,18 @@ stop_watcher(EV_P_ ev_io *w, timeout_timer *t)
         ev_timer_stop(EV_A_ &t->timer);
 }
 
+/*
+ * Mark a watcher as having its connection closed/shutdown.
+ */
 void
 mark_as_closed(ev_io *w)
 {
     w->fd = -1;
 }
 
+/*
+ * Check whether a watcher's connection has been closed/shutdown.
+ */
 bool
 is_closed(const ev_io *w)
 {
@@ -408,6 +421,13 @@ write_cb(EV_P_
     }
 }
 
+/*
+ * These are the libev ev_io callbacks that are installed in the libev
+ * event loop, one for each client socket (stdin/stdout) or server
+ * stream direction (srv_reader/srv_writer). They simply marshall the
+ * required structs and functions and pass them to the common callback
+ * routines (read_cb and write_cb).
+ */
 void
 stdin_cb(EV_P_ ev_io *w, int revents)
 {
@@ -484,6 +504,16 @@ stdout_cb(EV_P_ ev_io *w, int revents)
         log(LOG_WARNING, "srv_writer_cb spurious callback!");
 }
 
+/*
+ * Create a new client_session struct using the given file
+ * descriptors. Note that the client_session ev_io watchers and
+ * timeouts are initialized, but not started.
+ *
+ * N.B.: though two of the file descriptors are named stdin_fd and
+ * stdout_fd, they need not strictly be the stdin and stdout
+ * descriptors; they could be any non-blocking readable or writable
+ * descriptors, respectively.
+ */
 client_session *
 new_client_session(int stdin_fd, int stdout_fd, int server_fd)
 {
@@ -528,6 +558,15 @@ set_nonblocking(int fd)
     return 0;
 }
 
+/*
+ * This struct makes it possible to attempt a connection to each known
+ * address for the echo server (as returned by getaddrinfo) -- one at
+ * a time -- from the libev event loop, without blocking on
+ * connect(). The eio member is the watcher of the latest connection
+ * attempt. If it successfully connects, its file descriptor is the
+ * one that should be passed to the client_session constructor as the
+ * server file descriptor.
+ */
 typedef struct connect_watcher
 {
     ev_io eio;
@@ -576,9 +615,13 @@ connect_watcher *
 new_connector(struct addrinfo *addr, struct addrinfo *addr_base);
 
 /*
- * This callback exists merely to indicate when the non-blocking
- * connection attempt has succeeded, so that the echo protocol
- * callbacks can be installed.
+ * This callback creates a client_session structure and starts the
+ * echo protocol callbacks, if the current connection attempt
+ * succeeds; or tries the next address in the getaddrinfo sequence, if
+ * the current attempt fails.
+ *
+ * If the current attempt fails and there are no more addresses to
+ * try, the callback cleans up any remaining state and gives up.
  */
 void
 connect_cb(EV_P_ ev_io *w, int revents)
@@ -677,6 +720,9 @@ connect_cb(EV_P_ ev_io *w, int revents)
     }
 }
 
+/*
+ * Constructor for the connect_watcher struct.
+ */
 connect_watcher *
 new_connector(struct addrinfo *addr,
               struct addrinfo *addr_base)
