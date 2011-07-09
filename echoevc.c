@@ -158,6 +158,9 @@ typedef struct client_session
 #define SRV_READER_TIMEOUT_TO_CLIENT_SESSION(t)                        \
     (client_session *) (((void *)(t)) - offsetof(client_session, srv_reader_timeout));
 
+void
+teardown_session(EV_P_ client_session *cs);
+
 /* Default protocol timeout, in seconds. */
 static const ev_tstamp ECHO_PROTO_TIMEOUT = 120.0;
 
@@ -165,7 +168,7 @@ static const ev_tstamp ECHO_PROTO_TIMEOUT = 120.0;
  * Handles timeouts on established connections.
  */
 void
-echo_proto_timeout_cb(EV_P_ timeout_timer *t)
+echo_proto_timeout_cb(EV_P_ timeout_timer *t, client_session *cs)
 {
     ev_tstamp now = ev_now(EV_A);
     ev_tstamp timeout = t->last_activity + ECHO_PROTO_TIMEOUT;
@@ -173,7 +176,7 @@ echo_proto_timeout_cb(EV_P_ timeout_timer *t)
 
         /* A real timeout. */
         log(LOG_NOTICE, "Timeout, closing connection");
-        exit(1);
+        teardown_session(EV_A_ cs);
     } else {
 
         /* False alarm, re-arm timeout. */
@@ -187,7 +190,7 @@ stdin_timeout_cb(EV_P_ ev_timer *t_, int revents)
 {
     client_session *cs = STDIN_TIMEOUT_TO_CLIENT_SESSION(t_);
     assert(&cs->stdin_timeout.timer == t_);
-    echo_proto_timeout_cb(EV_A_ &cs->stdin_timeout);
+    echo_proto_timeout_cb(EV_A_ &cs->stdin_timeout, cs);
 }
 
 void
@@ -195,7 +198,7 @@ srv_writer_timeout_cb(EV_P_ ev_timer *t_, int revents)
 {
     client_session *cs = SRV_WRITER_TIMEOUT_TO_CLIENT_SESSION(t_);
     assert(&cs->srv_writer_timeout.timer == t_);
-    echo_proto_timeout_cb(EV_A_ &cs->srv_writer_timeout);
+    echo_proto_timeout_cb(EV_A_ &cs->srv_writer_timeout, cs);
 }
 
 void
@@ -203,7 +206,7 @@ srv_reader_timeout_cb(EV_P_ ev_timer *t_, int revents)
 {
     client_session *cs = SRV_READER_TIMEOUT_TO_CLIENT_SESSION(t_);
     assert(&cs->srv_reader_timeout.timer == t_);
-    echo_proto_timeout_cb(EV_A_ &cs->srv_reader_timeout);
+    echo_proto_timeout_cb(EV_A_ &cs->srv_reader_timeout, cs);
 }
 
 /*
@@ -211,12 +214,12 @@ srv_reader_timeout_cb(EV_P_ ev_timer *t_, int revents)
  * Assumes both have already been initialized.
  */
 void
-start_watcher(EV_P_ ev_io *w, timeout_timer *t)
+start_watcher(EV_P_ ev_io *w, timeout_timer *t, client_session *cs)
 {
     ev_io_start(EV_A_ w);
     if (t) {
         t->last_activity = ev_now(EV_A);
-        echo_proto_timeout_cb(EV_A_ t);
+        echo_proto_timeout_cb(EV_A_ t, cs);
     }
 }
 
@@ -284,6 +287,35 @@ close_watcher(EV_P_ ev_io *w)
 }
 
 /*
+ * Call this function to tear down the entire session immediately:
+ * close all file descriptors, cancel all timeouts, and free the
+ * client_session structure.
+ */
+void
+teardown_session(EV_P_ client_session *cs)
+{
+    if (!is_closed(&cs->stdin_io)) {
+        stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
+        close_watcher(EV_A_ &cs->stdin_io);
+    }
+    if (!is_closed(&cs->srv_writer_io)) {
+        stop_watcher(EV_A_ &cs->srv_writer_io, &cs->srv_writer_timeout);
+        shutdown_srv_writer(EV_A_ &cs->srv_writer_io);
+    }
+    if (!is_closed(&cs->srv_reader_io)) {
+        stop_watcher(EV_A_ &cs->srv_reader_io, &cs->srv_reader_timeout);
+        close_watcher(EV_A_ &cs->srv_reader_io);
+    }
+    if (!is_closed(&cs->stdout_io)) {
+
+        /* stdout has no timeout */
+        stop_watcher(EV_A_ &cs->stdout_io, 0);
+        close_watcher(EV_A_ &cs->stdout_io);
+    }
+    free(cs);
+}
+ 
+/*
  * Reads input from a watcher's descriptor, and schedules it for
  * writing using its paired ev_io writer.
  */
@@ -295,7 +327,8 @@ read_cb(EV_P_
         timeout_timer *reader_timeout,
         timeout_timer *writer_timeout,
         shutdown_fn reader_shutdown,
-        shutdown_fn writer_shutdown)
+        shutdown_fn writer_shutdown,
+        client_session *cs)
 {
     log(LOG_DEBUG, "read_cb called");
     
@@ -318,7 +351,7 @@ read_cb(EV_P_
             if (nread && (buf->msg_len == 0))
                 buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
             if (buf->msg_len)
-                start_watcher(EV_A_ writer, writer_timeout);
+                start_watcher(EV_A_ writer, writer_timeout, cs);
             else {
 
                 /*
@@ -345,7 +378,7 @@ read_cb(EV_P_
                 if (nread && (buf->msg_len == 0)) {
                     buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
                     if (buf->msg_len)
-                        start_watcher(EV_A_ writer, writer_timeout);
+                        start_watcher(EV_A_ writer, writer_timeout, cs);
                 }
                 return;
             } else {
@@ -443,7 +476,8 @@ stdin_cb(EV_P_ ev_io *w, int revents)
                 &cs->stdin_timeout,
                 &cs->srv_writer_timeout,
                 close_watcher,
-                shutdown_srv_writer);
+                shutdown_srv_writer,
+                cs);
     } else
         log(LOG_WARNING, "stdin_cb spurious callback!");
 }
@@ -481,7 +515,8 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
                 &cs->srv_reader_timeout,
                 0, /* no stdout timeout */
                 close_watcher,
-                close_watcher);
+                close_watcher,
+                cs);
     } else
         log(LOG_WARNING, "srv_reader_cb spurious callback!");
 }
@@ -708,8 +743,8 @@ connect_cb(EV_P_ ev_io *w, int revents)
          * Start only the reading watchers; there's nothing to write
          * until we get something from stdin or the echo server.
          */
-        start_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
-        start_watcher(EV_A_ &cs->srv_reader_io, &cs->srv_reader_timeout);
+        start_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout, cs);
+        start_watcher(EV_A_ &cs->srv_reader_io, &cs->srv_reader_timeout, cs);
 
         /* Don't need the connect watcher anymore. */
         ev_io_stop(EV_A_ w);
