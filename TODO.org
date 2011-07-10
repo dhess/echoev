@@ -2,8 +2,6 @@
 
 ** Make stdin per-character?
 
-** Free client_session struct when session is torn down.
-
 ** Clean up includes.
 
 ** Handle "odd" UNPv1e3 and libev client cases gracefully.
