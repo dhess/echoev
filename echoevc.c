@@ -680,6 +680,22 @@ initiate_connection(const struct sockaddr *addr, socklen_t addr_len)
     return -1;
 }
 
+/*
+ * Called by connect_cb when a serious C standard library-related
+ * error occurs that prevents connect_cb from making any more
+ * connection attempts. errnum contains the corresponding error number
+ * (for use with strerror, etc.).
+ *
+ * In this implementation, the function simply calls exit(3), but in a
+ * more complicated program (e.g., an interactive app), it might do
+ * something like display a "connection failed" dialog.
+ */
+void
+abort_connection(int errnum)
+{
+    exit(errnum);
+}
+ 
 connect_watcher *
 new_connector(struct addrinfo *addr, struct addrinfo *addr_base);
 
@@ -708,12 +724,10 @@ connect_cb(EV_P_ ev_io *w, int revents)
         socklen_t optlen;
         optlen = sizeof(optval);
         if (getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) {
-
-            /* Fatal. */
             log(LOG_ERR, "connect_cb getsockopt: %m");
             freeaddrinfo(c->addr_base);
             free(c);
-            exit(errno);
+            abort_connection(errno);
         }
         if (optval != 0) {
 
@@ -734,18 +748,17 @@ connect_cb(EV_P_ ev_io *w, int revents)
                     free(c);
                     return;
                 } else {
-
-                    /* Fatal. */
+                    log(LOG_ERR, "connect_cb can't create connect_watcher: %m");
                     freeaddrinfo(c->addr_base);
                     free(c);
-                    exit(optval);
+                    abort_connection(errno);
                 }
             } else {
 
-                /* Fatal. */
+                /* No more addresses to try. Fatal. */
                 freeaddrinfo(c->addr_base);
                 free(c);
-                exit(optval);
+                abort_connection(optval);
             }
         }
 
@@ -757,11 +770,11 @@ connect_cb(EV_P_ ev_io *w, int revents)
          */
         if (set_nonblocking(/* stdin */ 0) == -1) {
             log(LOG_ERR, "connect_cb can't make stdin non-blocking: %m");
-            exit(errno);
+            abort_connection(errno);
         }
         if (set_nonblocking(/* stdout */ 1) == -1) {
             log(LOG_ERR, "connect_cb can't make stdout non-blocking: %m");
-            exit(errno);
+            abort_connection(errno);
         }
 
         client_session *cs = new_client_session(/* stdin */ 0,
@@ -770,7 +783,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
 
         if (!cs) {
             log(LOG_ERR, "connect_cb can't create client_session: %m");
-            exit(errno);
+            abort_connection(errno);
         }
 
         /*
@@ -790,7 +803,9 @@ connect_cb(EV_P_ ev_io *w, int revents)
 }
 
 /*
- * Constructor for the connect_watcher struct.
+ * Constructor for the connect_watcher struct. Returns the address of
+ * the new connector_watcher if success, otherwise 0, in which case
+ * the error code is left in errno.
  */
 connect_watcher *
 new_connector(struct addrinfo *addr,

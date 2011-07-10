@@ -10,8 +10,8 @@
 
 ** Option to write as each character arrives on stdin.
 
-** Replace fatal exits with some kind of error handler.
-
 ** More consistent error handling/logging.
+
+** Make sure errno is preserved when logging.
 
 ** Test on OpenBSD.
