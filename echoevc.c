@@ -271,10 +271,8 @@ void
 shutdown_srv_writer(EV_P_ ev_io *w)
 {
     /* Half-close. */
-    if (shutdown(w->fd, SHUT_WR) == -1) {
-        log(LOG_ERR, "shutdown_srv_writer shutdown: %m");
-        exit(errno);
-    }
+    if (shutdown(w->fd, SHUT_WR) == -1)
+        log(LOG_WARNING, "shutdown_srv_writer shutdown: %m");
     mark_as_finished(w);
 }
 
@@ -285,10 +283,8 @@ shutdown_srv_writer(EV_P_ ev_io *w)
 void
 close_watcher(EV_P_ ev_io *w)
 {
-    if (close(w->fd) == -1) {
-        log(LOG_ERR, "close_watcher close on fd %d: %m", w->fd);
-        exit(errno);
-    }
+    if (close(w->fd) == -1)
+        log(LOG_WARNING, "close_watcher close on fd %d: %m", w->fd);
     mark_as_finished(w);
 }
 
