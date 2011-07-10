@@ -244,19 +244,16 @@ stop_watcher(EV_P_ ev_io *w, timeout_timer *t)
 }
 
 /*
- * Mark a watcher as having its connection closed/shutdown.
+ * Mark a watcher as finished (socket closed/shutdown).
  */
 void
-mark_as_closed(ev_io *w)
+mark_as_finished(ev_io *w)
 {
     w->fd = -1;
 }
 
-/*
- * Check whether a watcher's connection has been closed/shutdown.
- */
 bool
-is_closed(const ev_io *w)
+is_finished(const ev_io *w)
 {
     return w->fd == -1;
 }
@@ -278,12 +275,12 @@ shutdown_srv_writer(EV_P_ ev_io *w)
         log(LOG_ERR, "shutdown_srv_writer shutdown: %m");
         exit(errno);
     }
-    mark_as_closed(w);
+    mark_as_finished(w);
 }
 
 /*
  * The default shutdown function: just close(2) the watcher's file
- * descriptor, and mark it as closed.
+ * descriptor, and mark it as finished.
  */
 void
 close_watcher(EV_P_ ev_io *w)
@@ -292,7 +289,7 @@ close_watcher(EV_P_ ev_io *w)
         log(LOG_ERR, "close_watcher close on fd %d: %m", w->fd);
         exit(errno);
     }
-    mark_as_closed(w);
+    mark_as_finished(w);
 }
 
 /*
@@ -303,19 +300,19 @@ close_watcher(EV_P_ ev_io *w)
 void
 teardown_session(EV_P_ client_session *cs)
 {
-    if (!is_closed(&cs->stdin_io)) {
+    if (!is_finished(&cs->stdin_io)) {
         stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
         close_watcher(EV_A_ &cs->stdin_io);
     }
-    if (!is_closed(&cs->srv_writer_io)) {
+    if (!is_finished(&cs->srv_writer_io)) {
         stop_watcher(EV_A_ &cs->srv_writer_io, &cs->srv_writer_timeout);
         shutdown_srv_writer(EV_A_ &cs->srv_writer_io);
     }
-    if (!is_closed(&cs->srv_reader_io)) {
+    if (!is_finished(&cs->srv_reader_io)) {
         stop_watcher(EV_A_ &cs->srv_reader_io, &cs->srv_reader_timeout);
         close_watcher(EV_A_ &cs->srv_reader_io);
     }
-    if (!is_closed(&cs->stdout_io)) {
+    if (!is_finished(&cs->stdout_io)) {
 
         /* stdout has no timeout */
         stop_watcher(EV_A_ &cs->stdout_io, 0);
@@ -456,7 +453,7 @@ write_cb(EV_P_
         buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
         if (buf->msg_len == 0) {
             stop_watcher(EV_A_ writer, writer_timeout);
-            if (is_closed(reader)) {
+            if (is_finished(reader)) {
 
                 /* No more work for this reader/writer pair. */
                 writer_shutdown(EV_A_ writer);
@@ -536,19 +533,19 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
 
             /*
              * If either stdin_io or srv_writer_io has not already
-             * been closed, the server sent an EOF prematurely. Don't
+             * finished, the server sent an EOF prematurely. Don't
              * tear down the entire session -- let stdout drain any
              * remaining writes -- but shutdown the stdin half of the
              * client so that writes to the server won't fail.
              */
-            if (!is_closed(&cs->stdin_io) || !is_closed(&cs->srv_writer_io))
+            if (!is_finished(&cs->stdin_io) || !is_finished(&cs->srv_writer_io))
                 log(LOG_NOTICE, "Connection closed by server.");
 
-            if (!is_closed(&cs->stdin_io)) {
+            if (!is_finished(&cs->stdin_io)) {
                 stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
                 close_watcher(EV_A_ &cs->stdin_io);
             }
-            if (!is_closed(&cs->srv_writer_io)) {
+            if (!is_finished(&cs->srv_writer_io)) {
                 stop_watcher(EV_A_ &cs->srv_writer_io, &cs->srv_writer_timeout);
 
                 /* Server socket was already closed by read_cb. */
