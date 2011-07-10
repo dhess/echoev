@@ -327,8 +327,12 @@ teardown_session(EV_P_ client_session *cs)
 /*
  * Reads input from a watcher's descriptor, and schedules it for
  * writing using its paired ev_io writer.
+ *
+ * Returns 1 under normal conditions; 0 if an EOF was received; and -1
+ * if a serious error occurred (generally meaning that the session
+ * should be aborted).
  */
-void
+int
 read_cb(EV_P_
         ev_io *reader,
         ev_io *writer,
@@ -372,7 +376,7 @@ read_cb(EV_P_
                 stop_watcher(EV_A_ writer, writer_timeout);
                 writer_shutdown(EV_A_ writer);
             }
-            return;
+            return 0;
         } else if (n == -1) {
             if ((errno == EAGAIN) ||
                 (errno == EWOULDBLOCK) ||
@@ -388,12 +392,10 @@ read_cb(EV_P_
                     if (buf->msg_len)
                         start_watcher(EV_A_ writer, writer_timeout);
                 }
-                return;
+                return 1;
             } else {
-
-                /* Fatal. */
                 log(LOG_ERR, "read_cb read on fd %d: %m", reader->fd);
-                exit(errno);
+                return -1;
             }
         } else {
             nread += n;
@@ -403,9 +405,9 @@ read_cb(EV_P_
         }
     }
 
-    /* Overflow - fatal. */
+    /* Overflow. */
     log(LOG_ERR, "read_cb socket overflow on fd %d.", reader->fd);
-    exit(1);
+    return -1;
 }
 
 /*
@@ -477,14 +479,16 @@ stdin_cb(EV_P_ ev_io *w, int revents)
     if (revents & EV_READ) {
         client_session *cs = STDIN_IO_TO_CLIENT_SESSION(w);
         assert(&cs->stdin_io == w);
-        read_cb(EV_A_
-                &cs->stdin_io,
-                &cs->srv_writer_io,
-                &cs->stdin_buf,
-                &cs->stdin_timeout,
-                &cs->srv_writer_timeout,
-                close_watcher,
-                shutdown_srv_writer);
+        int status = read_cb(EV_A_
+                             &cs->stdin_io,
+                             &cs->srv_writer_io,
+                             &cs->stdin_buf,
+                             &cs->stdin_timeout,
+                             &cs->srv_writer_timeout,
+                             close_watcher,
+                             shutdown_srv_writer);
+        if (status == -1)
+            teardown_session(EV_A_ cs);
     } else
         log(LOG_WARNING, "stdin_cb spurious callback!");
 }
@@ -515,14 +519,38 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
     if (revents & EV_READ) {
         client_session *cs = SRV_READER_IO_TO_CLIENT_SESSION(w);
         assert(&cs->srv_reader_io == w);
-        read_cb(EV_A_
-                &cs->srv_reader_io,
-                &cs->stdout_io,
-                &cs->stdout_buf,
-                &cs->srv_reader_timeout,
-                0, /* no stdout timeout */
-                close_watcher,
-                close_watcher);
+        int status = read_cb(EV_A_
+                             &cs->srv_reader_io,
+                             &cs->stdout_io,
+                             &cs->stdout_buf,
+                             &cs->srv_reader_timeout,
+                             0, /* no stdout timeout */
+                             close_watcher,
+                             close_watcher);
+        if (status == 0) {
+
+            /*
+             * If either stdin_io or srv_writer_io has not already
+             * been closed, the server sent an EOF prematurely. Don't
+             * tear down the entire session -- let stdout drain any
+             * remaining writes -- but shutdown the stdin half of the
+             * client so that writes to the server won't fail.
+             */
+            if (!is_closed(&cs->stdin_io) || !is_closed(&cs->srv_writer_io))
+                log(LOG_NOTICE, "Connection closed by server.");
+
+            if (!is_closed(&cs->stdin_io)) {
+                stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
+                close_watcher(EV_A_ &cs->stdin_io);
+            }
+            if (!is_closed(&cs->srv_writer_io)) {
+                stop_watcher(EV_A_ &cs->srv_writer_io, &cs->srv_writer_timeout);
+
+                /* Server socket was already closed by read_cb. */
+            }
+        }
+        else if (status == -1)
+            teardown_session(EV_A_ cs);
     } else
         log(LOG_WARNING, "srv_reader_cb spurious callback!");
 }
