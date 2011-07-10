@@ -2,8 +2,6 @@
 
 ** Fix client_session leak when all readers/writers are shut down.
 
-** Make stdin per-character?
-
 ** Clean up includes.
 
 ** Handle "odd" UNPv1e3 and libev client cases gracefully.
