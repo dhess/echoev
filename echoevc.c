@@ -413,8 +413,11 @@ read_cb(EV_P_
 /*
  * This callback is scheduled by reading watchers when they receive
  * data for writing.
+ *
+ * Returns 0 under normal conditions, -1 if a serious error occurred
+ * (generally meaning that the session should be aborted.)
  */
-void
+int
 write_cb(EV_P_
          const ev_io *reader,
          ev_io *writer,
@@ -434,10 +437,8 @@ write_cb(EV_P_
                 (errno == EINTR))
                 break;
             else {
-
-                /* Fatal. */
                 log(LOG_ERR, "write_cb write on fd %d: %m", writer->fd);
-                exit(errno);
+                return -1;
             }
         } else {
             buf->msg_len -= n;
@@ -462,6 +463,8 @@ write_cb(EV_P_
             }
         }
     }
+
+    return 0;
 }
 
 /*
@@ -501,12 +504,14 @@ srv_writer_cb(EV_P_ ev_io *w, int revents)
     if (revents & EV_WRITE) {
         client_session *cs = SRV_WRITER_IO_TO_CLIENT_SESSION(w);
         assert(&cs->srv_writer_io == w);
-        write_cb(EV_A_
-                 &cs->stdin_io,
-                 &cs->srv_writer_io,
-                 &cs->stdin_buf,
-                 &cs->srv_writer_timeout,
-                 shutdown_srv_writer);
+        int status = write_cb(EV_A_
+                              &cs->stdin_io,
+                              &cs->srv_writer_io,
+                              &cs->stdin_buf,
+                              &cs->srv_writer_timeout,
+                              shutdown_srv_writer);
+        if (status == -1)
+            teardown_session(EV_A_ cs);
     } else
         log(LOG_WARNING, "srv_writer_cb spurious callback!");
 }
@@ -563,12 +568,14 @@ stdout_cb(EV_P_ ev_io *w, int revents)
     if (revents & EV_WRITE) {
         client_session *cs = STDOUT_IO_TO_CLIENT_SESSION(w);
         assert(&cs->stdout_io == w);
-        write_cb(EV_A_
-                 &cs->srv_reader_io,
-                 &cs->stdout_io,
-                 &cs->stdout_buf,
-                 0, /* no stdout timeout */
-                 close_watcher);
+        int status = write_cb(EV_A_
+                              &cs->srv_reader_io,
+                              &cs->stdout_io,
+                              &cs->stdout_buf,
+                              0, /* no stdout timeout */
+                              close_watcher);
+        if (status == -1)
+            teardown_session(EV_A_ cs);
     } else
         log(LOG_WARNING, "srv_writer_cb spurious callback!");
 }
