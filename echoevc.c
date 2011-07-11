@@ -706,10 +706,11 @@ connect_cb(EV_P_ ev_io *w, int revents)
         socklen_t optlen;
         optlen = sizeof(optval);
         if (getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) {
+            int errnum = errno;
             log(LOG_ERR, "connect_cb getsockopt: %m");
             freeaddrinfo(c->addr_base);
             free(c);
-            abort_connection(errno);
+            abort_connection(errnum);
         }
         if (optval != 0) {
 
@@ -730,10 +731,11 @@ connect_cb(EV_P_ ev_io *w, int revents)
                     free(c);
                     return;
                 } else {
+                    int errnum = errno;
                     log(LOG_ERR, "connect_cb can't create connect_watcher: %m");
                     freeaddrinfo(c->addr_base);
                     free(c);
-                    abort_connection(errno);
+                    abort_connection(errnum);
                 }
             } else {
 
@@ -751,12 +753,14 @@ connect_cb(EV_P_ ev_io *w, int revents)
          * libev to do its thing.
          */
         if (set_nonblocking(/* stdin */ 0) == -1) {
+            int errnum = errno;
             log(LOG_ERR, "connect_cb can't make stdin non-blocking: %m");
-            abort_connection(errno);
+            abort_connection(errnum);
         }
         if (set_nonblocking(/* stdout */ 1) == -1) {
+            int errnum = errno;
             log(LOG_ERR, "connect_cb can't make stdout non-blocking: %m");
-            abort_connection(errno);
+            abort_connection(errnum);
         }
 
         client_session *cs = new_client_session(/* stdin */ 0,
@@ -764,8 +768,9 @@ connect_cb(EV_P_ ev_io *w, int revents)
                                                 w->fd);
 
         if (!cs) {
+            int errnum = errno;
             log(LOG_ERR, "connect_cb can't create client_session: %m");
-            abort_connection(errno);
+            abort_connection(errnum);
         }
 
         /*
