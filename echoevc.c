@@ -515,11 +515,12 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
 
                     /* Server socket was already closed by read_cb. */
                 }
-            }
 
-            if (is_finished(&cs->stdout_io)) {
+                if (is_finished(&cs->stdout_io))
+                    free(cs);
+
+            } else if (is_finished(&cs->stdout_io)) {
                 log(LOG_NOTICE, "Connection closed.");
-                assert(is_finished(&cs->srv_reader_io));
                 free(cs);
             }
 
