@@ -42,6 +42,7 @@
 #include <sys/param.h>
 #include <getopt.h>
 #include <libgen.h>
+#include <assert.h>
 #include <ev.h>
 
 #include "logging.h"
@@ -378,8 +379,9 @@ read_cb(EV_P_
  * This callback is scheduled by reading watchers when they receive
  * data for writing.
  *
- * Returns 0 under normal conditions, -1 if a serious error occurred
- * (generally meaning that the session should be aborted.)
+ * Returns 1 under normal conditions, 0 if the reader has finished and
+ * the writer has no more messages to write, and -1 if a serious error
+ * occurred (generally meaning that the session should be aborted.)
  */
 int
 write_cb(EV_P_
@@ -424,11 +426,12 @@ write_cb(EV_P_
 
                 /* No more work for this reader/writer pair. */
                 writer_shutdown(EV_A_ writer);
+                return 0;
             }
         }
     }
 
-    return 0;
+    return 1;
 }
 
 /*
@@ -474,6 +477,8 @@ srv_writer_cb(EV_P_ ev_io *w, int revents)
                               shutdown_srv_writer);
         if (status == -1)
             teardown_session(EV_A_ cs);
+
+        /* No need to do anything special for status code 0. */
     } else
         log(LOG_WARNING, "srv_writer_cb spurious callback!");
 }
@@ -501,21 +506,32 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
              * tear down the entire session -- let stdout drain any
              * remaining writes -- but shutdown the stdin half of the
              * client so that writes to the server won't fail.
+             *
+             * On the other hand, if stdout_io is finished, then the
+             * session was terminated cleanly, and we're done.
              */
-            if (!is_finished(&cs->stdin_io) || !is_finished(&cs->srv_writer_io))
+            if (!is_finished(&cs->stdin_io) ||
+                !is_finished(&cs->srv_writer_io)) {
+
                 log(LOG_NOTICE, "Connection closed by server.");
+                if (!is_finished(&cs->stdin_io)) {
+                    stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
+                    close_watcher(EV_A_ &cs->stdin_io);
+                }
+                if (!is_finished(&cs->srv_writer_io)) {
+                    stop_watcher(EV_A_ &cs->srv_writer_io,
+                                 &cs->srv_writer_timeout);
 
-            if (!is_finished(&cs->stdin_io)) {
-                stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
-                close_watcher(EV_A_ &cs->stdin_io);
-            }
-            if (!is_finished(&cs->srv_writer_io)) {
-                stop_watcher(EV_A_ &cs->srv_writer_io, &cs->srv_writer_timeout);
+                    /* Server socket was already closed by read_cb. */
+                }
 
-                /* Server socket was already closed by read_cb. */
+            } else if (is_finished(&cs->stdout_io)) {
+                log(LOG_NOTICE, "Connection closed.");
+                assert(is_finished(&cs->srv_reader_io));
+                free(cs);
             }
-        }
-        else if (status == -1)
+
+        } else if (status == -1)
             teardown_session(EV_A_ cs);
     } else
         log(LOG_WARNING, "srv_reader_cb spurious callback!");
@@ -534,7 +550,21 @@ stdout_cb(EV_P_ ev_io *w, int revents)
                               &cs->stdout_buf,
                               0, /* no stdout timeout */
                               close_watcher);
-        if (status == -1)
+        if (status == 0) {
+
+            /*
+             * Session was terminated cleanly. All watchers should
+             * already be marked as finished, as stdout is the last
+             * stage of the echo pipeline.
+             */
+            log(LOG_NOTICE, "Connection closed.");
+            assert(is_finished(&cs->stdin_io) &&
+                   is_finished(&cs->srv_writer_io) &&
+                   is_finished(&cs->srv_reader_io) &&
+                   is_finished(&cs->stdout_io));
+            free(cs);
+
+        } else if (status == -1)
             teardown_session(EV_A_ cs);
     } else
         log(LOG_WARNING, "srv_writer_cb spurious callback!");
