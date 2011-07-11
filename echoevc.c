@@ -290,7 +290,7 @@ teardown_session(EV_P_ client_session *cs)
 }
  
 /*
- * Reads input from a watcher's descriptor, and schedules it for
+ * Reads messages from a watcher's descriptor, and schedules them for
  * writing using its paired ev_io writer.
  *
  * Returns 1 under normal conditions; 0 if an EOF was received; and -1
@@ -318,7 +318,7 @@ read_cb(EV_P_
             
             /*
              * EOF: shutdown this watcher, but drain any remaining
-             * writes.
+             * messages through the writer.
              */
             log(LOG_DEBUG, "read_cb EOF received on fd %d", reader->fd);
 
@@ -377,7 +377,7 @@ read_cb(EV_P_
 
 /*
  * This callback is scheduled by reading watchers when they receive
- * data for writing.
+ * messages for writing.
  *
  * Returns 1 under normal conditions, 0 if the reader has finished and
  * the writer has no more messages to write, and -1 if a serious error
