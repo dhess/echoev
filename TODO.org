@@ -10,8 +10,6 @@
 
 ** More consistent error handling/logging.
 
-** Make sure errno is preserved when logging.
-
 ** Refactor code to share with server implementation.
 
 ** Test on OpenBSD.

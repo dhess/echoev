@@ -179,20 +179,22 @@ _stderr_vsyslog(int perrno, int priority, const char *format, va_list args)
 static void
 stderr_vsyslog(int priority, const char *format, va_list args)
 {
-    /* preserve errno in case format contains %m. */
+    /* Preserving errno isn't strictly required, but it's nice. */
     int perrno = errno;
     _stderr_vsyslog(perrno, perrno, format, args);
+    errno = perrno;
 }
 
 static void
 stderr_syslog(int priority, const char *format, ...)
 {
-    /* preserve errno in case format contains %m. */
+    /* Preserving errno isn't strictly required, but it's nice. */
     int perrno = errno;
     va_list ap;
     va_start(ap, format);
     _stderr_vsyslog(perrno, priority, format, ap);
     va_end(ap);
+    errno = perrno;
 }
 
 void get_stderr_logger(syslog_fun *logger,
