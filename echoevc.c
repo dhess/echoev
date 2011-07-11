@@ -42,7 +42,6 @@
 #include <sys/param.h>
 #include <getopt.h>
 #include <libgen.h>
-#include <assert.h>
 #include <ev.h>
 
 #include "logging.h"
@@ -134,29 +133,11 @@ typedef struct client_session
 } client_session;
 
 /*
- * Macros to help libev callbacks go from ev_* struct pointers back to
+ * Macro to help libev callbacks go from ev_* struct pointers back to
  * their containing client_session.
  */
-#define STDIN_IO_TO_CLIENT_SESSION(w) \
-    (client_session *) (((void *)(w)) - offsetof(client_session, stdin_io));
-
-#define SRV_WRITER_IO_TO_CLIENT_SESSION(w) \
-    (client_session *) (((void *)(w)) - offsetof(client_session, srv_writer_io));
-
-#define SRV_READER_IO_TO_CLIENT_SESSION(w) \
-    (client_session *) (((void *)(w)) - offsetof(client_session, srv_reader_io));
-
-#define STDOUT_IO_TO_CLIENT_SESSION(w) \
-    (client_session *) (((void *)(w)) - offsetof(client_session, stdout_io));
-
-#define STDIN_TIMEOUT_TO_CLIENT_SESSION(t) \
-    (client_session *) (((void *)(t)) - offsetof(client_session, stdin_timeout));
-
-#define SRV_WRITER_TIMEOUT_TO_CLIENT_SESSION(t) \
-    (client_session *) (((void *)(t)) - offsetof(client_session, srv_writer_timeout));
-
-#define SRV_READER_TIMEOUT_TO_CLIENT_SESSION(t)                        \
-    (client_session *) (((void *)(t)) - offsetof(client_session, srv_reader_timeout));
+#define CLIENT_SESSION_OF(p, id) \
+    (client_session *) (((void *)(p)) - offsetof(client_session, id));
 
 void
 teardown_session(EV_P_ client_session *cs);
@@ -188,8 +169,7 @@ echo_proto_timeout_cb(EV_P_ timeout_timer *t)
 void
 stdin_timeout_cb(EV_P_ ev_timer *t_, int revents)
 {
-    client_session *cs = STDIN_TIMEOUT_TO_CLIENT_SESSION(t_);
-    assert(&cs->stdin_timeout.timer == t_);
+    client_session *cs = CLIENT_SESSION_OF(t_, stdin_timeout);
     if (echo_proto_timeout_cb(EV_A_ &cs->stdin_timeout)) {
         log(LOG_NOTICE, "Timeout on stdin, closing connection.");
         teardown_session(EV_A_ cs);
@@ -199,8 +179,7 @@ stdin_timeout_cb(EV_P_ ev_timer *t_, int revents)
 void
 srv_writer_timeout_cb(EV_P_ ev_timer *t_, int revents)
 {
-    client_session *cs = SRV_WRITER_TIMEOUT_TO_CLIENT_SESSION(t_);
-    assert(&cs->srv_writer_timeout.timer == t_);
+    client_session *cs = CLIENT_SESSION_OF(t_, srv_writer_timeout);
     if (echo_proto_timeout_cb(EV_A_ &cs->srv_writer_timeout)) {
         log(LOG_NOTICE, "Server timed out, closing connection.");
         teardown_session(EV_A_ cs);
@@ -210,8 +189,7 @@ srv_writer_timeout_cb(EV_P_ ev_timer *t_, int revents)
 void
 srv_reader_timeout_cb(EV_P_ ev_timer *t_, int revents)
 {
-    client_session *cs = SRV_READER_TIMEOUT_TO_CLIENT_SESSION(t_);
-    assert(&cs->srv_reader_timeout.timer == t_);
+    client_session *cs = CLIENT_SESSION_OF(t_, srv_reader_timeout);
     if (echo_proto_timeout_cb(EV_A_ &cs->srv_reader_timeout)) {
         log(LOG_NOTICE, "Server timed out, closing connection.");
         teardown_session(EV_A_ cs);
@@ -473,8 +451,7 @@ stdin_cb(EV_P_ ev_io *w, int revents)
     log(LOG_DEBUG, "stdin_cb called");
 
     if (revents & EV_READ) {
-        client_session *cs = STDIN_IO_TO_CLIENT_SESSION(w);
-        assert(&cs->stdin_io == w);
+        client_session *cs = CLIENT_SESSION_OF(w, stdin_io);
         int status = read_cb(EV_A_
                              &cs->stdin_io,
                              &cs->srv_writer_io,
@@ -495,8 +472,7 @@ srv_writer_cb(EV_P_ ev_io *w, int revents)
     log(LOG_DEBUG, "srv_writer_cb called");
 
     if (revents & EV_WRITE) {
-        client_session *cs = SRV_WRITER_IO_TO_CLIENT_SESSION(w);
-        assert(&cs->srv_writer_io == w);
+        client_session *cs = CLIENT_SESSION_OF(w, srv_writer_io);
         int status = write_cb(EV_A_
                               &cs->stdin_io,
                               &cs->srv_writer_io,
@@ -515,8 +491,7 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
     log(LOG_DEBUG, "srv_reader_cb called");
 
     if (revents & EV_READ) {
-        client_session *cs = SRV_READER_IO_TO_CLIENT_SESSION(w);
-        assert(&cs->srv_reader_io == w);
+        client_session *cs = CLIENT_SESSION_OF(w, srv_reader_io);
         int status = read_cb(EV_A_
                              &cs->srv_reader_io,
                              &cs->stdout_io,
@@ -559,8 +534,7 @@ stdout_cb(EV_P_ ev_io *w, int revents)
     log(LOG_DEBUG, "stdout_cb called");
 
     if (revents & EV_WRITE) {
-        client_session *cs = STDOUT_IO_TO_CLIENT_SESSION(w);
-        assert(&cs->stdout_io == w);
+        client_session *cs = CLIENT_SESSION_OF(w, stdout_io);
         int status = write_cb(EV_A_
                               &cs->srv_reader_io,
                               &cs->stdout_io,
