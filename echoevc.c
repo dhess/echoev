@@ -233,25 +233,17 @@ is_finished(const ev_io *w)
 typedef void (* shutdown_fn)(ev_io *);
 
 /*
- * A special shutdown function for the echo server writer
- * watcher. It's called when there's no more data to be written from
- * stdin. The writer watcher must not close(2) the echo server
- * connection, because the client might still be waiting for data to
- * be echoed back from the echo server.
+ * A half-close shutdown for the watcher that writes to the echo
+ * server. Call it when stdin gets an EOF.
  */
 void
 shutdown_srv_writer(ev_io *w)
 {
-    /* Half-close. */
     if (shutdown(w->fd, SHUT_WR) == -1)
         log(LOG_WARNING, "shutdown_srv_writer shutdown: %m");
     mark_as_finished(w);
 }
 
-/*
- * The default shutdown function: just close(2) the watcher's file
- * descriptor, and mark it as finished.
- */
 void
 close_watcher(ev_io *w)
 {
