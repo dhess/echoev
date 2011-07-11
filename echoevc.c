@@ -500,18 +500,14 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
 
             /*
              * If either stdin_io or srv_writer_io has not already
-             * finished, the server sent an EOF prematurely. Don't
-             * tear down the entire session -- let stdout drain any
-             * remaining writes -- but shutdown the stdin half of the
-             * client so that writes to the server won't fail.
-             *
-             * On the other hand, if stdout_io is finished, then the
-             * session was terminated cleanly, and we're done.
+             * finished, the server sent an EOF prematurely.  Shutdown
+             * the stdin half of the client so that writes to the
+             * server won't fail.
              */
             if (!is_finished(&cs->stdin_io) ||
                 !is_finished(&cs->srv_writer_io)) {
 
-                log(LOG_NOTICE, "Connection closed by server.");
+                log(LOG_WARNING, "Connection closed by server.");
                 if (!is_finished(&cs->stdin_io)) {
                     stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
                     close_watcher(EV_A_ &cs->stdin_io);
@@ -522,8 +518,9 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
 
                     /* Server socket was already closed by read_cb. */
                 }
+            }
 
-            } else if (is_finished(&cs->stdout_io)) {
+            if (is_finished(&cs->stdout_io)) {
                 log(LOG_NOTICE, "Connection closed.");
                 assert(is_finished(&cs->srv_reader_io));
                 free(cs);
