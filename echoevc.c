@@ -400,9 +400,10 @@ write_cb(EV_P_
         if (n == -1) {
             if ((errno == EAGAIN) ||
                 (errno == EWOULDBLOCK) ||
-                (errno == EINTR))
-                break;
-            else {
+                (errno == EINTR)) {
+
+                return 1;
+            } else {
                 log(LOG_ERR, "write_cb write on fd %d: %m", writer->fd);
                 return -1;
             }
