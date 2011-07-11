@@ -860,7 +860,7 @@ main(int argc, char *argv[])
     char *progname = strdup(argv[0]);
     if (!progname) {
         perror("strdup");
-        exit(errno);
+        exit(1);
     }
     
     long loglevel = LOG_NOTICE;
@@ -879,14 +879,14 @@ main(int argc, char *argv[])
             loglevel = strtol(optarg, 0, 10);
             if (errno || loglevel < 0 || loglevel > 7) {
                 fprintf(stderr, "Log level must be between 0 and 7, inclusive.\n");
-                exit(errno);
+                exit(1);
             }
             break;
         case 'p':
             portstr = strdup(optarg);
             if (!portstr) {
                 perror("strdup");
-                exit(errno);
+                exit(1);
             }
             break;
         case 'n':
@@ -929,7 +929,7 @@ main(int argc, char *argv[])
     char *hostname = strdup(argv[0]);
     if (!hostname) {
         perror("strdup");
-        exit(errno);
+        exit(1);
     }
     
     get_stderr_logger(&log, 0, &logmask);
@@ -942,7 +942,7 @@ main(int argc, char *argv[])
     sa.sa_flags = 0;
     if (sigaction(SIGPIPE, &sa, &osa) == -1) {
         log(LOG_ERR, "sigaction: %m");
-        exit(errno);
+        exit(1);
     }
     
     struct ev_loop *loop = EV_DEFAULT;
@@ -959,7 +959,7 @@ main(int argc, char *argv[])
                           &res);
     if (err) {
         log(LOG_ERR, "%s", gai_strerror(err));
-        exit(err);
+        exit(1);
     }
 
     connect_watcher *c = new_connector(res, res);
@@ -971,7 +971,7 @@ main(int argc, char *argv[])
         ev_io_start(loop, &c->eio);
     }
     else
-        exit(errno);
+        exit(1);
 
     /* Clean up before entering ev_run loop */
     if (portstr)
