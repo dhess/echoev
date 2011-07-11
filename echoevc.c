@@ -304,7 +304,6 @@ read_cb(EV_P_
         msg_buf *buf,
         timeout_timer *reader_timeout,
         timeout_timer *writer_timeout,
-        shutdown_fn reader_shutdown,
         shutdown_fn writer_shutdown)
 {
     log(LOG_DEBUG, "read_cb called");
@@ -326,7 +325,7 @@ read_cb(EV_P_
             log(LOG_DEBUG, "read_cb EOF received on fd %d", reader->fd);
 
             stop_watcher(EV_A_ reader, reader_timeout);
-            reader_shutdown(EV_A_ reader);
+            close_watcher(EV_A_ reader);
 
             if (buf->msg_len == 0) {
                 assert(!ev_is_active(writer) && !ev_is_pending(writer));
@@ -452,7 +451,6 @@ stdin_cb(EV_P_ ev_io *w, int revents)
                              &cs->stdin_buf,
                              &cs->stdin_timeout,
                              &cs->srv_writer_timeout,
-                             close_watcher,
                              shutdown_srv_writer);
         if (status == -1)
             teardown_session(EV_A_ cs);
@@ -494,7 +492,6 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
                              &cs->stdout_buf,
                              &cs->srv_reader_timeout,
                              0, /* no stdout timeout */
-                             close_watcher,
                              close_watcher);
         if (status == 0) {
 
