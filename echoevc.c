@@ -318,30 +318,27 @@ read_cb(EV_P_
             
             /*
              * EOF: shutdown this watcher, but drain any remaining
-             * messages through the writer.
+             * messages through the writer. If there are none,
+             * shutdown the writer, too. N.B.: incomplete messages
+             * (those without a terminating MSG_DELIMITER) will be
+             * discarded, by design.
              */
             log(LOG_DEBUG, "read_cb EOF received on fd %d", reader->fd);
 
             stop_watcher(EV_A_ reader, reader_timeout);
             reader_shutdown(EV_A_ reader);
 
-            if (nread && (buf->msg_len == 0))
-                buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
-            if (buf->msg_len)
-                start_watcher(EV_A_ writer, writer_timeout);
-            else {
-
-                /*
-                 * Nothing left to write: stop the writer, too.
-                 *
-                 * Note: this will discard any incomplete messages
-                 * (those without a terminating MSG_DELIMITER), by
-                 * design.
-                 */
-                stop_watcher(EV_A_ writer, writer_timeout);
-                writer_shutdown(EV_A_ writer);
+            if (buf->msg_len == 0) {
+                assert(!ev_is_active(writer) && !ev_is_pending(writer));
+                if (nread &&
+                    (buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER))) {
+                    
+                    start_watcher(EV_A_ writer, writer_timeout);
+                } else
+                    writer_shutdown(EV_A_ writer);
             }
             return 0;
+
         } else if (n == -1) {
             if ((errno == EAGAIN) ||
                 (errno == EWOULDBLOCK) ||
