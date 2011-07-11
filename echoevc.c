@@ -316,7 +316,7 @@ read_cb(EV_P_
         if (n == 0) {
             
             /*
-             * EOF: shutdown this watcher, but drain any remaining
+             * EOF: this watcher is finished, but drain any remaining
              * messages through the writer. If there are none,
              * shutdown the writer, too. N.B.: incomplete messages
              * (those without a terminating MSG_DELIMITER) will be
