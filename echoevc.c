@@ -230,7 +230,7 @@ is_finished(const ev_io *w)
     return w->fd == -1;
 }
 
-typedef void (* shutdown_fn)(EV_P_ ev_io *);
+typedef void (* shutdown_fn)(ev_io *);
 
 /*
  * A special shutdown function for the echo server writer
@@ -240,7 +240,7 @@ typedef void (* shutdown_fn)(EV_P_ ev_io *);
  * be echoed back from the echo server.
  */
 void
-shutdown_srv_writer(EV_P_ ev_io *w)
+shutdown_srv_writer(ev_io *w)
 {
     /* Half-close. */
     if (shutdown(w->fd, SHUT_WR) == -1)
@@ -253,7 +253,7 @@ shutdown_srv_writer(EV_P_ ev_io *w)
  * descriptor, and mark it as finished.
  */
 void
-close_watcher(EV_P_ ev_io *w)
+close_watcher(ev_io *w)
 {
     if (close(w->fd) == -1)
         log(LOG_WARNING, "close_watcher close on fd %d: %m", w->fd);
@@ -270,21 +270,21 @@ teardown_session(EV_P_ client_session *cs)
 {
     if (!is_finished(&cs->stdin_io)) {
         stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
-        close_watcher(EV_A_ &cs->stdin_io);
+        close_watcher(&cs->stdin_io);
     }
     if (!is_finished(&cs->srv_writer_io)) {
         stop_watcher(EV_A_ &cs->srv_writer_io, &cs->srv_writer_timeout);
-        shutdown_srv_writer(EV_A_ &cs->srv_writer_io);
+        shutdown_srv_writer(&cs->srv_writer_io);
     }
     if (!is_finished(&cs->srv_reader_io)) {
         stop_watcher(EV_A_ &cs->srv_reader_io, &cs->srv_reader_timeout);
-        close_watcher(EV_A_ &cs->srv_reader_io);
+        close_watcher(&cs->srv_reader_io);
     }
     if (!is_finished(&cs->stdout_io)) {
 
         /* stdout has no timeout */
         stop_watcher(EV_A_ &cs->stdout_io, 0);
-        close_watcher(EV_A_ &cs->stdout_io);
+        close_watcher(&cs->stdout_io);
     }
     free(cs);
 }
@@ -325,7 +325,7 @@ read_cb(EV_P_
             log(LOG_DEBUG, "read_cb EOF received on fd %d", reader->fd);
 
             stop_watcher(EV_A_ reader, reader_timeout);
-            close_watcher(EV_A_ reader);
+            close_watcher(reader);
 
             if (buf->msg_len == 0) {
                 assert(!ev_is_active(writer) && !ev_is_pending(writer));
@@ -334,7 +334,7 @@ read_cb(EV_P_
                     
                     start_watcher(EV_A_ writer, writer_timeout);
                 } else
-                    writer_shutdown(EV_A_ writer);
+                    writer_shutdown(writer);
             }
             return 0;
 
@@ -422,7 +422,7 @@ write_cb(EV_P_
             if (is_finished(reader)) {
 
                 /* No more work for this reader/writer pair. */
-                writer_shutdown(EV_A_ writer);
+                writer_shutdown(writer);
                 return 0;
             }
         }
@@ -507,7 +507,7 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
                 log(LOG_WARNING, "Connection closed by server.");
                 if (!is_finished(&cs->stdin_io)) {
                     stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
-                    close_watcher(EV_A_ &cs->stdin_io);
+                    close_watcher(&cs->stdin_io);
                 }
                 if (!is_finished(&cs->srv_writer_io)) {
                     stop_watcher(EV_A_ &cs->srv_writer_io,
