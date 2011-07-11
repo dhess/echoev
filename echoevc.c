@@ -132,16 +132,6 @@ typedef struct client_session
     timeout_timer srv_reader_timeout;
 } client_session;
 
-/*
- * Macro to help libev callbacks go from ev_* struct pointers back to
- * their containing client_session.
- */
-#define CLIENT_SESSION_OF(p, id) \
-    (client_session *) (((void *)(p)) - offsetof(client_session, id));
-
-void
-teardown_session(EV_P_ client_session *cs);
-
 /* Default protocol timeout, in seconds. */
 static const ev_tstamp ECHO_PROTO_TIMEOUT = 120.0;
 
@@ -166,35 +156,38 @@ echo_proto_timeout_cb(EV_P_ timeout_timer *t)
     }
 }
 
-void
-stdin_timeout_cb(EV_P_ ev_timer *t_, int revents)
-{
-    client_session *cs = CLIENT_SESSION_OF(t_, stdin_timeout);
-    if (echo_proto_timeout_cb(EV_A_ &cs->stdin_timeout)) {
-        log(LOG_NOTICE, "Timeout on stdin, closing connection.");
-        teardown_session(EV_A_ cs);
-    }
-}
+/*
+ * Macro to help libev callbacks go from ev_* struct pointers back to
+ * their containing client_session.
+ */
+#define CLIENT_SESSION_OF(p, id)                                        \
+    (client_session *) (((void *)(p)) - offsetof(client_session, id));
 
 void
-srv_writer_timeout_cb(EV_P_ ev_timer *t_, int revents)
-{
-    client_session *cs = CLIENT_SESSION_OF(t_, srv_writer_timeout);
-    if (echo_proto_timeout_cb(EV_A_ &cs->srv_writer_timeout)) {
-        log(LOG_NOTICE, "Server timed out, closing connection.");
-        teardown_session(EV_A_ cs);
-    }
-}
+teardown_session(EV_P_ client_session *cs);
 
-void
-srv_reader_timeout_cb(EV_P_ ev_timer *t_, int revents)
-{
-    client_session *cs = CLIENT_SESSION_OF(t_, srv_reader_timeout);
-    if (echo_proto_timeout_cb(EV_A_ &cs->srv_reader_timeout)) {
-        log(LOG_NOTICE, "Server timed out, closing connection.");
-        teardown_session(EV_A_ cs);
+#define DEFINE_TIMEOUT_CB(fun_name, timeout_id, timeout_str)     \
+    void                                                         \
+    fun_name(EV_P_ ev_timer *_t, int _revents)                   \
+    {                                                            \
+        client_session *_cs = CLIENT_SESSION_OF(_t, timeout_id); \
+        if (echo_proto_timeout_cb(EV_A_ &_cs->timeout_id)) {     \
+            log(LOG_NOTICE, timeout_str);                        \
+            teardown_session(EV_A_ _cs);                         \
+        }                                                        \
     }
-}
+
+DEFINE_TIMEOUT_CB(stdin_timeout_cb, \
+                  stdin_timeout,    \
+                  "Timeout on stdin, closing connection.");
+
+DEFINE_TIMEOUT_CB(srv_writer_timeout_cb, \
+                  srv_writer_timeout,    \
+                  "Server timed out on write, closing connection.");
+
+DEFINE_TIMEOUT_CB(srv_reader_timeout_cb, \
+                  srv_reader_timeout,    \
+                  "Server timed out on read, closing connection.");
 
 /*
  * Start an ev_io watcher and its echo protocol timer (if non-NULL).
