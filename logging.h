@@ -55,9 +55,6 @@ typedef int (*setlogmask_fun)(int mask);
  *
  * Note that you can obtain these logging functions at any time, and
  * freely switch between them, if you wish.
- *
- * Do not free the function pointers returned by these functions; you
- * don't own the functions, you simply have a handle to them.
  */
 
 /*
