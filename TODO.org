@@ -2,8 +2,6 @@
 
 ** Clean up includes.
 
-** Handle "odd" UNPv1e3 and libev client cases gracefully.
-
 ** Configurable logging prefixes.
 
 ** Option to write as each character arrives on stdin.
