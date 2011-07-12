@@ -663,48 +663,42 @@ connect_cb(EV_P_ ev_io *w, int revents)
          * This is how we tell if the asynchronous connect(2) was
          * successful.
          */
-        int optval;
-        socklen_t optlen;
-        optlen = sizeof(optval);
-        if (getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) {
-            int errnum = errno;
-            log(LOG_ERR, "getsockopt failed: %m");
-            freeaddrinfo(c->addr_base);
-            free(c);
-            abort_connection(errnum);
-        }
-        if (optval != 0) {
+        int optval = 0;
+        socklen_t optlen = sizeof(optval);
+        if ((getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) ||
+            (optval != 0)) {
 
             /* Connection failed; try the next address in the list. */
-            log(LOG_NOTICE, "Connection failed: %s", strerror(optval));
+            int errnum = optval ? optval : errno;
+            log(LOG_NOTICE, "Connection failed: %s", strerror(errnum));
             ev_io_stop(EV_A_ w);
             close(w->fd);
 
-            if (c->addr->ai_next) {
-                connect_watcher *cnext = new_connector(c->addr->ai_next,
-                                                       c->addr_base);
+            struct addrinfo *next_addr = c->addr->ai_next;
+            struct addrinfo *addr_base = c->addr_base;
+            free(c);
+            
+            if (next_addr) {
+                connect_watcher *cnext = new_connector(next_addr, addr_base);
                 if (cnext) {
                     log_with_addr(LOG_NOTICE,
                                   "Trying connection to %s...",
                                   cnext->addr->ai_addr,
                                   cnext->addr->ai_addrlen);
                     ev_io_start(EV_A_ &cnext->eio);
-                    free(c);
                     return;
                 } else {
-                    int errnum = errno;
+                    errnum = errno;
                     log(LOG_ERR, "Can't create a new connection: %m");
-                    freeaddrinfo(c->addr_base);
-                    free(c);
+                    freeaddrinfo(addr_base);
                     abort_connection(errnum);
                 }
             } else {
 
                 /* No more addresses to try. Fatal. */
                 log(LOG_ERR, "Can't connect to server.");
-                freeaddrinfo(c->addr_base);
-                free(c);
-                abort_connection(optval);
+                freeaddrinfo(addr_base);
+                abort_connection(errnum);
             }
         }
 
