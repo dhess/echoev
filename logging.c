@@ -148,48 +148,44 @@ stderr_setlogmask(int mask)
     return prev;
 }
 
-static void
-_stderr_vsyslog(int perrno, int priority, const char *format, va_list args)
+static const char *
+_stderr_prefix(int priority)
 {
-    if (!(LOG_MASK(priority) & stderr_logmask))
-        return;
-
     /*
      * Using LOG_PRI probably isn't standard, but I don't know a more
      * portable way to determine the log level from priority, since
      * it's perfectly legal for the user to OR the level with the
      * facility when forming priority.
      */
-    const char *levelstr = 0;
     switch (LOG_PRI(priority)) {
     case LOG_DEBUG:
-        levelstr = "DEBUG: ";
-        break;
+        return "DEBUG: ";
     case LOG_INFO:
-        levelstr = "INFO: ";
-        break;
+        return "INFO: ";
     case LOG_NOTICE:
-        levelstr = "NOTICE: ";
-        break;
+        return "NOTICE: ";
     case LOG_WARNING:
-        levelstr = "WARNING: ";
-        break;
+        return "WARNING: ";
     case LOG_ERR:
-        levelstr = "ERR: ";
-        break;
+        return "ERR: ";
     case LOG_CRIT:
-        levelstr = "CRIT: ";
-        break;
+        return "CRIT: ";
     case LOG_ALERT:
-        levelstr = "ALERT: ";
-        break;
+        return "ALERT: ";
     case LOG_EMERG:
-        levelstr = "EMERG: ";
-        break;
+        return "EMERG: ";
     default:
-        levelstr = "UNKNOWN: ";
+        return "UNKNOWN: ";
     }
+}
 
+static void
+_stderr_vsyslog(int perrno, int priority, const char *format, va_list args)
+{
+    if (!(LOG_MASK(priority) & stderr_logmask))
+        return;
+
+    const char *levelstr = _stderr_prefix(priority);
     fprintf(stderr, "%s", levelstr);
     char *eformat = strrep(format, "%m", strerror(perrno));
     vfprintf(stderr, eformat, args);
