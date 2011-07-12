@@ -624,44 +624,6 @@ typedef struct connect_watcher
 } connect_watcher;
 
 /*
- * Initiate a connection on a non-blocking socket using the given
- * socket address.
- *
- * The function returns the socket's file descriptor. Select (using
- * select(2) or one of its cousins) the socket for writing in order to
- * wait for the connection to complete.
- *
- * If an immediate error occurs, the error code is left in errno, and
- * the function returns -1.
- */
-int
-initiate_connection(const struct sockaddr *addr, socklen_t addr_len)
-{
-    int errnum;
-    
-    int fd = socket(addr->sa_family, SOCK_STREAM, 0);
-    if (fd == -1)
-        return -1;
-    if (set_nonblocking(fd) == -1)
-        goto err_cleanup;
-
-    /*
-     * Treat both an immediate connection and EINPROGRESS as success,
-     * let the caller sort it out.
-     */
-    int status = connect(fd, addr, addr_len);
-    if ((status == 0) || ((status == -1) && (errno == EINPROGRESS)))
-        return fd;
-    /* else error */
-
-  err_cleanup:
-    errnum = errno;
-    close(fd);
-    errno = errnum;
-    return -1;
-}
-
-/*
  * Called by connect_cb when a serious C standard library-related
  * error occurs that prevents connect_cb from making any more
  * connection attempts. errnum contains the corresponding error number
@@ -790,25 +752,49 @@ connect_cb(EV_P_ ev_io *w, int revents)
 }
 
 /*
- * Constructor for the connect_watcher struct. Returns the address of
- * the new connector_watcher if success, otherwise 0, in which case
- * the error code is left in errno.
+ * Initiate a non-blocking connection using the given socket
+ * address. Returns a connect_watcher struct, which includes a libev
+ * watcher that will call connect_cb with EV_WRITE when the connection
+ * is ready (or has failed).
+ *
+ * Note that, because the connection is non-blocking, some errors may
+ * be deferred until connect_cb is called. Such errors will be
+ * reported in connect_cb. If an immediate error occurs, this function
+ * returns 0, and the error code is left in errno.
  */
 connect_watcher *
 new_connector(struct addrinfo *addr,
               struct addrinfo *addr_base)
 {
-    int fd = initiate_connection(addr->ai_addr, addr->ai_addrlen);
+    int errnum;
+    
+    int fd = socket(addr->ai_addr->sa_family, SOCK_STREAM, 0);
     if (fd == -1)
         return 0;
-
-    connect_watcher *c = malloc(sizeof(connect_watcher));
-    if (c) {
-        ev_io_init(&c->eio, connect_cb, fd, EV_WRITE);
-        c->addr = addr;
-        c->addr_base = addr_base;
+    if (set_nonblocking(fd) == -1)
+        goto err_cleanup;
+    
+    /*
+     * Treat both an immediate connection and EINPROGRESS as success,
+     * let the caller sort it out.
+     */
+    int status = connect(fd, addr->ai_addr, addr->ai_addrlen);
+    if ((status == 0) || ((status == -1) && (errno == EINPROGRESS))) {
+        connect_watcher *c = malloc(sizeof(connect_watcher));
+        if (c) {
+            ev_io_init(&c->eio, connect_cb, fd, EV_WRITE);
+            c->addr = addr;
+            c->addr_base = addr_base;
+            return c;
+        }
+        /* else error */
     }
-    return c;
+
+  err_cleanup:
+    errnum = errno;
+    close(fd);
+    errno = errnum;
+    return 0;
 }
 
 const char *default_portstr = "7777";

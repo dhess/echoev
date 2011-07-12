@@ -1,7 +1,5 @@
 * Write a client.
 
-** fix fd leak in new_connector when malloc fails.
-
 ** Clean up includes.
 
 ** Handle "odd" UNPv1e3 and libev client cases gracefully.
