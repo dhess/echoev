@@ -46,9 +46,11 @@
  * are, in the new string, replaced by the string s3. The caller owns
  * the new string.
  *
- * If any of s1, s2, or s3 are NULL, the function returns NULL.
- *
  * Strings s1, s2, and s3 must all be null-terminated strings.
+ *
+ * If any of s1, s2, or s3 are NULL, the function returns NULL. If an
+ * error occurs, the function returns NULL, though unfortunately there
+ * is no way to determine the nature of the error from the call site.
  */
 
 char *
@@ -63,6 +65,11 @@ strrep(const char *s1, const char *s2, const char *s3)
     if (!s2_len)
         return (char *)s1;
 
+    /*
+     * Two-pass approach: figure out how much space to allocate for
+     * the new string, pre-allocate it, then perform replacement(s).
+     */
+
     size_t count = 0;
     const char *p = s1;
     do {
@@ -76,9 +83,24 @@ strrep(const char *s1, const char *s2, const char *s3)
     if (!count)
         return (char *)s1;
 
+    /*
+     * The following size arithmetic is extremely cautious, to guard
+     * against size_t overflows.
+     */
+    size_t s1_without_s2_len = s1_len - count * s2_len;
     size_t s3_len = strlen(s3);
-    char *newstr = (char *)malloc(s1_len - count * s2_len + count * s3_len + 1);
-    char *dst = newstr;
+    size_t s1_with_s3_len = s1_without_s2_len + count * s3_len;
+    if (s3_len &&
+        ((s1_with_s3_len <= s1_without_s2_len) || (s1_with_s3_len + 1 == 0)))
+        /* Overflow. */
+        return 0;
+    
+    char *s1_with_s3 = (char *)malloc(s1_with_s3_len + 1); /* w/ terminator */
+    if (!s1_with_s3)
+        /* ENOMEM, but no good way to signal it. */
+        return 0;
+    
+    char *dst = s1_with_s3;
     const char *start_substr = s1;
     size_t i;
     for (i = 0; i != count; ++i) {
@@ -94,7 +116,7 @@ strrep(const char *s1, const char *s2, const char *s3)
     /* copy remainder of s1, including trailing '\0' */
     size_t remains = s1_len - (start_substr - s1) + 1;
     memcpy(dst, start_substr, remains);
-    return newstr;
+    return s1_with_s3;
 }
 
 void get_syslog_logger(syslog_fun *logger,
