@@ -10,8 +10,6 @@
 
 ** Option to write as each character arrives on stdin.
 
-** More consistent error handling/logging.
-
 ** Refactor code to share with server implementation.
 
 ** Test on OpenBSD.

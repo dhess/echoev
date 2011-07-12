@@ -70,7 +70,9 @@ log_with_addr(int priority,
                           0,
                           NI_NUMERICHOST);
     if (err)
-        log(LOG_ERR, "log_with_addr getnameinfo: %s", gai_strerror(err));
+        log(LOG_WARNING,
+            "log_with_addr getnameinfo failed: %s",
+            gai_strerror(err));
     else
         log(priority, fmt, host);
 }
@@ -173,7 +175,7 @@ teardown_session(EV_P_ client_session *cs);
     {                                                            \
         client_session *_cs = CLIENT_SESSION_OF(_t, timeout_id); \
         if (echo_proto_timeout_cb(EV_A_ &_cs->timeout_id)) {     \
-            log(LOG_NOTICE, timeout_str);                        \
+            log(LOG_ERR, timeout_str);                           \
             teardown_session(EV_A_ _cs);                         \
         }                                                        \
     }
@@ -240,7 +242,7 @@ void
 shutdown_srv_writer(ev_io *w)
 {
     if (shutdown(w->fd, SHUT_WR) == -1)
-        log(LOG_WARNING, "shutdown_srv_writer shutdown: %m");
+        log(LOG_WARNING, "shutdown_srv_writer shutdown failed: %m");
     mark_as_finished(w);
 }
 
@@ -248,7 +250,7 @@ void
 close_watcher(ev_io *w)
 {
     if (close(w->fd) == -1)
-        log(LOG_WARNING, "close_watcher close on fd %d: %m", w->fd);
+        log(LOG_WARNING, "close_watcher close on fd %d failed: %m", w->fd);
     mark_as_finished(w);
 }
 
@@ -347,7 +349,7 @@ read_cb(EV_P_
                 }
                 return 1;
             } else {
-                log(LOG_ERR, "read_cb read on fd %d: %m", reader->fd);
+                log(LOG_ERR, "Read on descriptor %d failed: %m", reader->fd);
                 return -1;
             }
         } else {
@@ -359,7 +361,7 @@ read_cb(EV_P_
     }
 
     /* Overflow. */
-    log(LOG_ERR, "read_cb socket overflow on fd %d.", reader->fd);
+    log(LOG_ERR, "Read overflow on descriptor %d.", reader->fd);
     return -1;
 }
 
@@ -392,7 +394,7 @@ write_cb(EV_P_
 
                 return 1;
             } else {
-                log(LOG_ERR, "write_cb write on fd %d: %m", writer->fd);
+                log(LOG_ERR, "Write on descriptor %d failed: %m", writer->fd);
                 return -1;
             }
         } else {
@@ -496,7 +498,7 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
             if (!is_finished(&cs->stdin_io) ||
                 !is_finished(&cs->srv_writer_io)) {
 
-                log(LOG_WARNING, "Connection closed by server.");
+                log(LOG_ERR, "Connection closed by server.");
                 if (!is_finished(&cs->stdin_io)) {
                     stop_watcher(EV_A_ &cs->stdin_io, &cs->stdin_timeout);
                     close_watcher(&cs->stdin_io);
@@ -590,22 +592,18 @@ new_client_session(int stdin_fd, int stdout_fd, int server_fd)
 /*
  * Make an existing socket non-blocking.
  *
- * Return 0 if successful, otherwise -1, in which case the error is
- * logged, and the error code is left in errno.
+ * Return 0 if successful, otherwise -1, in which case the error code
+ * is left in errno.
  */
 int
 set_nonblocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1) {
-        log(LOG_ERR, "fcntl: %m");
+    if (flags == -1)
         return -1;
-    }
     flags |= O_NONBLOCK;
-    if (fcntl(fd, F_SETFL, flags) == -1) {
-        log(LOG_ERR, "fcntl: %m");
+    if (fcntl(fd, F_SETFL, flags) == -1)
         return -1;
-    }
     return 0;
 }
 
@@ -633,19 +631,19 @@ typedef struct connect_watcher
  * select(2) or one of its cousins) the socket for writing in order to
  * wait for the connection to complete.
  *
- * If an immediate error occurs, the error is logged, the error code
- * is left in errno, and the function returns -1.
+ * If an immediate error occurs, the error code is left in errno, and
+ * the function returns -1.
  */
 int
 initiate_connection(const struct sockaddr *addr, socklen_t addr_len)
 {
+    int errnum;
+    
     int fd = socket(addr->sa_family, SOCK_STREAM, 0);
-    if (fd == -1) {
-        log(LOG_ERR, "socket: %m");
+    if (fd == -1)
         return -1;
-    }
     if (set_nonblocking(fd) == -1)
-        goto err;
+        goto err_cleanup;
 
     /*
      * Treat both an immediate connection and EINPROGRESS as success,
@@ -654,11 +652,12 @@ initiate_connection(const struct sockaddr *addr, socklen_t addr_len)
     int status = connect(fd, addr, addr_len);
     if ((status == 0) || ((status == -1) && (errno == EINPROGRESS)))
         return fd;
-    else
-        log(LOG_ERR, "connect: %m");
+    /* else error */
 
-  err:
+  err_cleanup:
+    errnum = errno;
     close(fd);
+    errno = errnum;
     return -1;
 }
 
@@ -707,7 +706,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
         optlen = sizeof(optval);
         if (getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) {
             int errnum = errno;
-            log(LOG_ERR, "connect_cb getsockopt: %m");
+            log(LOG_ERR, "getsockopt failed: %m");
             freeaddrinfo(c->addr_base);
             free(c);
             abort_connection(errnum);
@@ -715,7 +714,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
         if (optval != 0) {
 
             /* Connection failed; try the next address in the list. */
-            log(LOG_ERR, "Connection failed: %s", strerror(optval));
+            log(LOG_NOTICE, "Connection failed: %s", strerror(optval));
             ev_io_stop(EV_A_ w);
             close(w->fd);
 
@@ -732,7 +731,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
                     return;
                 } else {
                     int errnum = errno;
-                    log(LOG_ERR, "connect_cb can't create connect_watcher: %m");
+                    log(LOG_ERR, "Can't create a new connection: %m");
                     freeaddrinfo(c->addr_base);
                     free(c);
                     abort_connection(errnum);
@@ -740,6 +739,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
             } else {
 
                 /* No more addresses to try. Fatal. */
+                log(LOG_ERR, "Can't connect to server.");
                 freeaddrinfo(c->addr_base);
                 free(c);
                 abort_connection(optval);
@@ -754,12 +754,12 @@ connect_cb(EV_P_ ev_io *w, int revents)
          */
         if (set_nonblocking(/* stdin */ 0) == -1) {
             int errnum = errno;
-            log(LOG_ERR, "connect_cb can't make stdin non-blocking: %m");
+            log(LOG_ERR, "Can't make stdin non-blocking: %m");
             abort_connection(errnum);
         }
         if (set_nonblocking(/* stdout */ 1) == -1) {
             int errnum = errno;
-            log(LOG_ERR, "connect_cb can't make stdout non-blocking: %m");
+            log(LOG_ERR, "Can't make stdout non-blocking: %m");
             abort_connection(errnum);
         }
 
@@ -769,7 +769,7 @@ connect_cb(EV_P_ ev_io *w, int revents)
 
         if (!cs) {
             int errnum = errno;
-            log(LOG_ERR, "connect_cb can't create client_session: %m");
+            log(LOG_ERR, "Can't create client_session: %m");
             abort_connection(errnum);
         }
 
@@ -941,7 +941,7 @@ main(int argc, char *argv[])
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     if (sigaction(SIGPIPE, &sa, &osa) == -1) {
-        log(LOG_ERR, "sigaction: %m");
+        log(LOG_ERR, "Trying to ignore SIGPIPE, but failed: %m");
         exit(1);
     }
     
@@ -958,7 +958,7 @@ main(int argc, char *argv[])
                           &hints,
                           &res);
     if (err) {
-        log(LOG_ERR, "%s", gai_strerror(err));
+        log(LOG_ERR, "getaddrinfo failed: %s", gai_strerror(err));
         exit(1);
     }
 
@@ -970,8 +970,10 @@ main(int argc, char *argv[])
                       res->ai_addrlen);
         ev_io_start(loop, &c->eio);
     }
-    else
+    else {
+        log(LOG_ERR, "Can't create a new connection: %m");
         exit(1);
+    }
 
     /* Clean up before entering ev_run loop */
     if (portstr)
