@@ -148,8 +148,8 @@ stderr_setlogmask(int mask)
     return prev;
 }
 
-static const char *
-_stderr_prefix(int priority)
+const char *
+level_prefix(int priority)
 {
     /*
      * Using LOG_PRI probably isn't standard, but I don't know a more
@@ -179,13 +179,24 @@ _stderr_prefix(int priority)
     }
 }
 
+/* XXX dhess - not thread-safe. */
+static level_prefix_fun stderr_level_prefix_fn = level_prefix;
+
+level_prefix_fun
+set_stderr_level_prefix_fun(level_prefix_fun new_fn)
+{
+    level_prefix_fun prev_fn = stderr_level_prefix_fn;
+    stderr_level_prefix_fn = new_fn;
+    return prev_fn;
+}
+
 static void
 _stderr_vsyslog(int perrno, int priority, const char *format, va_list args)
 {
     if (!(LOG_MASK(priority) & stderr_logmask))
         return;
 
-    const char *levelstr = _stderr_prefix(priority);
+    const char *levelstr = stderr_level_prefix_fn(priority);
     fprintf(stderr, "%s", levelstr);
     char *eformat = strrep(format, "%m", strerror(perrno));
     vfprintf(stderr, eformat, args);

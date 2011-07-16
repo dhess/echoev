@@ -36,14 +36,20 @@
 
 /*
  * Convenient typedefs:
+ *
  * syslog_fun is a function prototype for a function like syslog(3).
+ *
  * vsyslog_fun is a function prototype for a function like vsyslog(3).
+ *
  * setlogmask_fun is a function prototype for a function like setlogmask(3).
+ *
+ * level_prefix_fun is a function prototype for a function like
+ * level_prefix() (see below).
  */
-
 typedef void (*syslog_fun)(int priority, const char *format, ...);
 typedef void (*vsyslog_fun)(int priority, const char *format, va_list args);
 typedef int (*setlogmask_fun)(int mask);
+typedef const char * (*level_prefix_fun)(int priority);
 
 /*
  * These functions return pointers to functions that log to syslog, or
@@ -85,3 +91,27 @@ void get_syslog_logger(syslog_fun *logger,
 void get_stderr_logger(syslog_fun *logger,
                        vsyslog_fun *vlogger,
                        setlogmask_fun *setmask);
+
+/*
+ * By default, the stderr logger uses the included level_prefix()
+ * function to display the logging level when logging messages, but
+ * you can override it with this function. The function returns a
+ * pointer to the previously-installed level prefix function.
+ *
+ * NOTE: this function modifies global state, and is neither
+ * thread-safe nor reentrant.
+ */
+level_prefix_fun
+set_stderr_level_prefix_fun(level_prefix_fun new_fn);
+
+/*
+ * Convenience functions for writing your own loggers.
+ */
+
+/*
+ * For a given syslog priority, return a const, null-terminated string
+ * that corresponds to the priority's logging level, formatted for use
+ * as a logging prefix. (e.g., returns "DEBUG: " for level LOG_DEBUG)
+ */
+const char *
+level_prefix(int level);
