@@ -822,6 +822,17 @@ print_version(const char *name)
     printf("%s version %s\n", name, version);
 }
 
+const char *
+logging_level_prefix(int priority)
+{
+    switch (LOG_PRI(priority)) {
+    case LOG_DEBUG:
+        return "DEBUG: ";
+    default:
+        return "";
+    }
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -914,6 +925,7 @@ main(int argc, char *argv[])
     
     get_stderr_logger(&log, 0, &logmask);
     logmask(LOG_UPTO(loglevel));
+    set_stderr_level_prefix_fun(logging_level_prefix);
     
     /* Ignore SIGPIPE. */
     struct sigaction sa, osa;
