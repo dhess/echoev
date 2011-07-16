@@ -114,4 +114,4 @@ set_stderr_level_prefix_fun(level_prefix_fun new_fn);
  * as a logging prefix. (e.g., returns "DEBUG: " for level LOG_DEBUG)
  */
 const char *
-level_prefix(int level);
+level_prefix(int priority);
