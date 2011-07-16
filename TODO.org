@@ -2,8 +2,6 @@
 
 ** Clean up includes.
 
-** Configurable logging prefixes.
-
 ** Option to write as each character arrives on stdin.
 
 ** Refactor code to share with server implementation.
