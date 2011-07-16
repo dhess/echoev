@@ -98,6 +98,9 @@ void get_stderr_logger(syslog_fun *logger,
  * you can override it with this function. The function returns a
  * pointer to the previously-installed level prefix function.
  *
+ * You can change this function at any time, and freely switch between
+ * functions.
+ *
  * NOTE: this function modifies global state, and is neither
  * thread-safe nor reentrant.
  */
