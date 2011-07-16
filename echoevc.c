@@ -55,6 +55,8 @@ const char MSG_DELIMITER = '\n';
 static syslog_fun log;
 static setlogmask_fun logmask;
 
+static size_t client_ringbuf_capacity = 32768;
+
 static void
 log_with_addr(int priority,
               const char *fmt,
@@ -81,7 +83,7 @@ log_with_addr(int priority,
  * Returns 0 if no full message yet received.
  */
 size_t
-next_msg_len(const ringbuf_t *rb, char delimiter)
+next_msg_len(const struct ringbuf_t *rb, char delimiter)
 {
     size_t delim_location = ringbuf_findchr(rb, delimiter, 0);
     if (delim_location < ringbuf_bytes_used(rb))
@@ -103,9 +105,9 @@ typedef struct msg_buf
 } msg_buf;
 
 void
-msg_buf_init(msg_buf *buf)
+msg_buf_init(msg_buf *buf, size_t capacity)
 {
-    ringbuf_init(&buf->rb);
+    buf->rb = ringbuf_new(capacity);
     buf->msg_len = 0;
 }
 
@@ -303,10 +305,10 @@ read_cb(EV_P_
     log(LOG_DEBUG, "read_cb called");
     
     size_t nread = 0;
-    while (ringbuf_bytes_free(&buf->rb)) {
+    while (ringbuf_bytes_free(buf->rb)) {
         ssize_t n = ringbuf_read(reader->fd,
-                                 &buf->rb,
-                                 ringbuf_bytes_free(&buf->rb));
+                                 buf->rb,
+                                 ringbuf_bytes_free(buf->rb));
         if (n == 0) {
             
             /*
@@ -324,7 +326,7 @@ read_cb(EV_P_
             if (buf->msg_len == 0) {
                 assert(!ev_is_active(writer) && !ev_is_pending(writer));
                 if (nread &&
-                    (buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER))) {
+                    (buf->msg_len = next_msg_len(buf->rb, MSG_DELIMITER))) {
                     
                     start_watcher(EV_A_ writer, writer_timeout);
                 } else
@@ -343,7 +345,7 @@ read_cb(EV_P_
                  * not already another message to be written.
                  */
                 if (nread && (buf->msg_len == 0)) {
-                    buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
+                    buf->msg_len = next_msg_len(buf->rb, MSG_DELIMITER);
                     if (buf->msg_len)
                         start_watcher(EV_A_ writer, writer_timeout);
                 }
@@ -385,7 +387,7 @@ write_cb(EV_P_
 
     while (buf->msg_len) {
         ssize_t n = ringbuf_write(writer->fd,
-                                  &buf->rb,
+                                  buf->rb,
                                   buf->msg_len);
         if (n == -1) {
             if ((errno == EAGAIN) ||
@@ -410,7 +412,7 @@ write_cb(EV_P_
     if (buf->msg_len == 0) {
 
         /* Look for more messages; stop/shutdown if none. */
-        buf->msg_len = next_msg_len(&buf->rb, MSG_DELIMITER);
+        buf->msg_len = next_msg_len(buf->rb, MSG_DELIMITER);
         if (buf->msg_len == 0) {
             stop_watcher(EV_A_ writer, writer_timeout);
             if (is_finished(reader)) {
@@ -574,8 +576,8 @@ new_client_session(int stdin_fd, int stdout_fd, int server_fd)
     if (!cs)
         return 0;
 
-    msg_buf_init(&cs->stdin_buf);
-    msg_buf_init(&cs->stdout_buf);
+    msg_buf_init(&cs->stdin_buf, client_ringbuf_capacity);
+    msg_buf_init(&cs->stdout_buf, client_ringbuf_capacity);
 
     ev_io_init(&cs->stdin_io, stdin_cb, stdin_fd, EV_READ);
     ev_io_init(&cs->stdout_io, stdout_cb, stdout_fd, EV_WRITE);

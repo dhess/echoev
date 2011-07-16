@@ -55,6 +55,8 @@ const char MSG_DELIMITER = '\n';
 static syslog_fun log;
 static setlogmask_fun logmask;
 
+static size_t server_ringbuf_capacity = 8192;
+
 static void
 log_with_addr(int priority,
               const char *fmt,
@@ -138,7 +140,7 @@ stop_echo_watcher(EV_P_ echo_io *w)
  * Returns 0 if no full message yet received.
  */
 size_t
-next_msg_len(const ringbuf_t *rb, char delimiter)
+next_msg_len(const struct ringbuf_t *rb, char delimiter)
 {
     size_t delim_location = ringbuf_findchr(rb, delimiter, 0);
     if (delim_location < ringbuf_bytes_used(rb))
@@ -161,7 +163,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
         log(LOG_DEBUG, "echo_cb write event");
         while (w->msg_len) {
             ssize_t n = ringbuf_write(w->io.fd,
-                                      &w->rb,
+                                      w->rb,
                                       w->msg_len);
             if (n == -1) {
                 if ((errno == EAGAIN) ||
@@ -182,7 +184,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
         if (w->msg_len == 0) {
 
             /* Look for more messages */
-            w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
+            w->msg_len = next_msg_len(w->rb, MSG_DELIMITER);
             if (w->msg_len == 0) {
                 if (w->half_closed)
                     stop_echo_watcher(EV_A_ w);
@@ -195,17 +197,17 @@ echo_cb(EV_P_ ev_io *w_, int revents)
     if (revents & EV_READ) {
         log(LOG_DEBUG, "echo_cb read event");
         size_t nread = 0;
-        while (ringbuf_bytes_free(&w->rb)) {
+        while (ringbuf_bytes_free(w->rb)) {
             ssize_t n = ringbuf_read(w->io.fd,
-                                     &w->rb,
-                                     ringbuf_bytes_free(&w->rb));
+                                     w->rb,
+                                     ringbuf_bytes_free(w->rb));
             if (n == 0) {
 
                 /* EOF: drain remaining writes or close connection */
                 log(LOG_DEBUG, "echo_cb EOF received");
                 w->timeout.last_activity = ev_now(EV_A);
                 if (nread && (w->msg_len == 0))
-                    w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
+                    w->msg_len = next_msg_len(w->rb, MSG_DELIMITER);
                 if (w->msg_len) {
                     w->half_closed = true;
                     reset_echo_watcher(EV_A_ &w->io, EV_WRITE);
@@ -225,7 +227,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                      * not already another message to be written.
                      */
                     if (nread && (w->msg_len == 0)) {
-                        w->msg_len = next_msg_len(&w->rb, MSG_DELIMITER);
+                        w->msg_len = next_msg_len(w->rb, MSG_DELIMITER);
                         if (w->msg_len)
                             reset_echo_watcher(EV_A_ &w->io,
                                                EV_READ | EV_WRITE);
@@ -288,7 +290,7 @@ make_echo_watcher(EV_P_ int wfd)
 
     echo_io *watcher = malloc(sizeof(echo_io));
     if (watcher) {
-        ringbuf_init(&watcher->rb);
+        watcher->rb = ringbuf_new(server_ringbuf_capacity);
         watcher->half_closed = false;
         watcher->msg_len = 0;
 
