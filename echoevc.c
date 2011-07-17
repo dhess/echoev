@@ -97,6 +97,7 @@ msg_buf_init(msg_buf *buf, size_t capacity)
 {
     buf->rb = ringbuf_new(capacity);
     buf->msg_len = 0;
+    buf->search_offset = 0;
 }
 
 /*
