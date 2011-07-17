@@ -79,19 +79,6 @@ log_with_addr(int priority,
         log(priority, fmt, host);
 }
 
-/*
- * Returns 0 if no full message yet received.
- */
-size_t
-next_msg_len(const struct ringbuf_t *rb, char delimiter)
-{
-    size_t delim_location = ringbuf_findchr(rb, delimiter, 0);
-    if (delim_location < ringbuf_bytes_used(rb))
-        return delim_location + 1;
-    else
-        return 0;
-}
-
 typedef struct timeout_timer
 {
     ev_timer timer;
@@ -101,6 +88,7 @@ typedef struct timeout_timer
 typedef struct msg_buf
 {
     ringbuf_t rb;
+    size_t search_offset;
     size_t msg_len;
 } msg_buf;
 
@@ -312,11 +300,11 @@ read_cb(EV_P_
         if (n == 0) {
             
             /*
-             * EOF: this watcher is finished, but drain any remaining
-             * messages through the writer. If there are none,
-             * shutdown the writer, too. N.B.: incomplete messages
-             * (those without a terminating MSG_DELIMITER) will be
-             * discarded, by design.
+             * EOF: this watcher is finished. If there are no more
+             * messages pending writes, shutdown the writer,
+             * too. N.B.: incomplete messages (those without a
+             * terminating MSG_DELIMITER) will be discarded, by
+             * design.
              */
             log(LOG_DEBUG, "read_cb EOF received on fd %d", reader->fd);
 
@@ -325,12 +313,7 @@ read_cb(EV_P_
 
             if (buf->msg_len == 0) {
                 assert(!ev_is_active(writer) && !ev_is_pending(writer));
-                if (nread &&
-                    (buf->msg_len = next_msg_len(buf->rb, MSG_DELIMITER))) {
-                    
-                    start_watcher(EV_A_ writer, writer_timeout);
-                } else
-                    writer_shutdown(writer);
+                writer_shutdown(writer);
             }
             return 0;
 
@@ -339,17 +322,9 @@ read_cb(EV_P_
                 (errno == EWOULDBLOCK) ||
                 (errno == EINTR)) {
 
-                /*
-                 * Nothing more to read for now; schedule a write
-                 * if we've received a full message and there's
-                 * not already another message to be written.
-                 */
-                if (nread && (buf->msg_len == 0)) {
-                    buf->msg_len = next_msg_len(buf->rb, MSG_DELIMITER);
-                    if (buf->msg_len)
-                        start_watcher(EV_A_ writer, writer_timeout);
-                }
+                /* Nothing more to read for now. */
                 return 1;
+
             } else {
                 log(LOG_ERR, "Read on descriptor %d failed: %m", reader->fd);
                 return -1;
@@ -359,6 +334,22 @@ read_cb(EV_P_
             if (reader_timeout)
                 reader_timeout->last_activity = ev_now(EV_A);
             log(LOG_DEBUG, "read_cb %zd bytes read on fd %d", n, reader->fd);
+
+            /*
+             * If there's no pending message to send, look for a new
+             * one. If found, schedule the writer.
+             */
+            if (buf->msg_len == 0) {
+                size_t eol = ringbuf_findchr(buf->rb,
+                                             MSG_DELIMITER,
+                                             buf->search_offset);
+                if (eol < ringbuf_bytes_used(buf->rb)) {
+                    buf->search_offset = 0;
+                    buf->msg_len = eol + 1;
+                    start_watcher(EV_A_ writer, writer_timeout);
+                } else
+                    buf->search_offset = eol;
+            }
         }
     }
 
@@ -409,21 +400,22 @@ write_cb(EV_P_
                 writer->fd);
         }
     }
-    if (buf->msg_len == 0) {
 
-        /* Look for more messages; stop/shutdown if none. */
-        buf->msg_len = next_msg_len(buf->rb, MSG_DELIMITER);
-        if (buf->msg_len == 0) {
-            stop_watcher(EV_A_ writer, writer_timeout);
-            if (is_finished(reader)) {
+    /* Look for more messages; stop/shutdown if none. */
+    size_t eol = ringbuf_findchr(buf->rb, MSG_DELIMITER, buf->search_offset);
+    if (eol < ringbuf_bytes_used(buf->rb)) {
+        buf->search_offset = 0;
+        buf->msg_len = eol + 1;
+    } else {
+        stop_watcher(EV_A_ writer, writer_timeout);
+        if (is_finished(reader)) {
 
-                /* No more work for this reader/writer pair. */
-                writer_shutdown(writer);
-                return 0;
-            }
-        }
+            /* No more work for this reader/writer pair. */
+            writer_shutdown(writer);
+            return 0;
+        } else
+            buf->search_offset = eol;
     }
-
     return 1;
 }
 
