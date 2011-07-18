@@ -4,7 +4,7 @@ PLATFORM=-D ECHOEV_PLATFORM_MACOSX
 
 CC=gcc
 INCLUDES=-I /usr/local/include
-CFLAGS=-O2 -Wall -g $(INCLUDES) $(PLATFORM)
+CFLAGS=-O2 -Wall -Wno-strict-aliasing -g $(INCLUDES) $(PLATFORM)
 
 LD=gcc
 LIBS=-L /usr/local/lib
