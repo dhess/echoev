@@ -424,6 +424,7 @@ write_cb(EV_P_
                     "write_cb re-starting reads on fd %d.",
                     reader->fd);
                 start_watcher(EV_A_ reader, reader_timeout);
+                buf_is_full = false;
             }
         }
     }
