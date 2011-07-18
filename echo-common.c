@@ -37,12 +37,6 @@ msg_buf_init(msg_buf *buf, size_t capacity)
     buf->search_offset = 0;
 }
 
-/*
- * Make an existing socket non-blocking.
- *
- * Return 0 if successful, otherwise -1, in which case the error code
- * is left in errno.
- */
 int
 set_nonblocking(int fd)
 {
