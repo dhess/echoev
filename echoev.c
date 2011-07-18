@@ -92,6 +92,13 @@ typedef struct echo_io
 } echo_io;
     
 void
+free_echo_watcher(echo_io *w)
+{
+    ringbuf_free(&(w->buf.rb));
+    free(w);
+}
+
+void
 stop_echo_watcher(EV_P_ echo_io *w)
 {
     struct sockaddr_storage addr;
@@ -106,7 +113,7 @@ stop_echo_watcher(EV_P_ echo_io *w)
     ev_io_stop(EV_A_ &w->io);
     ev_timer_stop(EV_A_ &w->timeout.timer);
     close(w->io.fd);
-    free(w);
+    free_echo_watcher(w);
 }
 
 void

@@ -108,6 +108,14 @@ typedef struct client_session
     timeout_timer srv_reader_timeout;
 } client_session;
 
+void
+free_client_session(client_session *cs)
+{
+    ringbuf_free(&(cs->stdin_buf.rb));
+    ringbuf_free(&(cs->stdout_buf.rb));
+    free(cs);
+}
+
 /* Default protocol timeout, in seconds. */
 static const ev_tstamp ECHO_PROTO_TIMEOUT = 120.0;
 
@@ -253,7 +261,7 @@ teardown_session(EV_P_ client_session *cs)
         stop_watcher(EV_A_ &cs->stdout_io, 0);
         close_watcher(&cs->stdout_io);
     }
-    free(cs);
+    free_client_session(cs);
 }
  
 /*
@@ -516,11 +524,11 @@ srv_reader_cb(EV_P_ ev_io *w, int revents)
                 }
 
                 if (is_finished(&cs->stdout_io))
-                    free(cs);
+                    free_client_session(cs);
 
             } else if (is_finished(&cs->stdout_io)) {
                 log(LOG_NOTICE, "Connection closed.");
-                free(cs);
+                free_client_session(cs);
             }
 
         } else if (status == -1)
@@ -555,7 +563,7 @@ stdout_cb(EV_P_ ev_io *w, int revents)
                    is_finished(&cs->srv_writer_io) &&
                    is_finished(&cs->srv_reader_io) &&
                    is_finished(&cs->stdout_io));
-            free(cs);
+            free_client_session(cs);
 
         } else if (status == -1)
             teardown_session(EV_A_ cs);
