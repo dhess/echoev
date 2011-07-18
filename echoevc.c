@@ -927,9 +927,19 @@ main(int argc, char *argv[])
         log(LOG_ERR, "Trying to ignore SIGPIPE, but failed: %m");
         exit(1);
     }
-    
-    struct ev_loop *loop = EV_DEFAULT;
 
+    /*
+     * Force the select(2) libev backend; the default backend on Linux
+     * (epoll?) doesn't work correctly with stdout that's been
+     * redirected to a file. The libev documentation says it's slower
+     * than select(2) for a small number of file descriptors, anyway.
+     */
+    struct ev_loop *loop = ev_default_loop(EVBACKEND_SELECT);
+    if (!loop) {
+        log(LOG_ERR, "Can't initialise libev; bad $LIBEV_FLAGS in environment?");
+        exit(1);
+    }
+    
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
     hints.ai_socktype = SOCK_STREAM;
