@@ -1,5 +1,3 @@
 * Write a client.
 
-** Refactor code to share with server implementation.
-
 ** Test on OpenBSD.
