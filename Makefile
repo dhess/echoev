@@ -30,10 +30,10 @@ logging.o: logging.c logging.h
 ringbuf.o: ringbuf.c ringbuf.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-echoev.o: echoev.c logging.h
+echoev.o: echoev.c logging.h ringbuf.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-echoevc.o: echoevc.c logging.h
+echoevc.o: echoevc.c logging.h ringbuf.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
