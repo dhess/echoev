@@ -944,7 +944,12 @@ main(int argc, char *argv[])
     memset(&hints, 0, sizeof(hints));
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
+#ifdef ECHOEV_PLATFORM_BSD
+    /* AI_ADDRCONFIG is not supported/broken on most BSDs. */
+    hints.ai_flags = opt_ai_flags;
+#else
     hints.ai_flags = AI_ADDRCONFIG | opt_ai_flags;
+#endif
     hints.ai_family = opt_ai_family;
     int err = getaddrinfo(hostname,
                           portstr ? portstr : default_portstr,
