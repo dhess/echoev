@@ -1,9 +1,5 @@
 * Write a client.
 
-** Clean up includes.
-
-** Option to write as each character arrives on stdin.
-
 ** Refactor code to share with server implementation.
 
 ** Test on OpenBSD.
