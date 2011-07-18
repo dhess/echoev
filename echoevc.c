@@ -47,7 +47,7 @@
 #include "ringbuf.h"
 #include "echo-common.h"
 
-const char *version = "0.9";
+const char *version = "1.0";
 
 static syslog_fun log;
 static setlogmask_fun logmask;
