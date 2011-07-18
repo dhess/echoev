@@ -354,9 +354,21 @@ read_cb(EV_P_
         }
     }
 
-    /* Overflow. */
-    log(LOG_ERR, "Read overflow on descriptor %d.", reader->fd);
-    return -1;
+    /*
+     * If we get here, the buffer is full. If there's a pending
+     * message waiting to be written, disable reads until the writes
+     * free up space. If there's no pending message, we've overflowed.
+     */
+    if (buf->msg_len) {
+        log(LOG_DEBUG,
+            "read_cb buffer full, disabling reads on fd %d.",
+            reader->fd);
+        stop_watcher(EV_A_ reader, reader_timeout);
+        return 1;
+    } else {
+        log(LOG_ERR, "Read overflow on descriptor %d.", reader->fd);
+        return -1;
+    }
 }
 
 /*
@@ -369,13 +381,16 @@ read_cb(EV_P_
  */
 int
 write_cb(EV_P_
-         const ev_io *reader,
+         ev_io *reader,
          ev_io *writer,
          msg_buf *buf,
+         timeout_timer *reader_timeout,
          timeout_timer *writer_timeout,
          shutdown_fn writer_shutdown)
 {
     log(LOG_DEBUG, "write_cb called");
+
+    bool buf_is_full = ringbuf_is_full(buf->rb);
 
     while (buf->msg_len) {
         ssize_t n = ringbuf_write(writer->fd,
@@ -399,6 +414,17 @@ write_cb(EV_P_
                 "write_cb %zd bytes written to fd %d",
                 n,
                 writer->fd);
+
+            /*
+             * Re-enable reads if they are paused due to buffer
+             * pressure.
+             */
+            if (buf_is_full && !is_finished(reader)) {
+                log(LOG_DEBUG,
+                    "write_cb re-starting reads on fd %d.",
+                    reader->fd);
+                start_watcher(EV_A_ reader, reader_timeout);
+            }
         }
     }
 
@@ -458,6 +484,7 @@ srv_writer_cb(EV_P_ ev_io *w, int revents)
                               &cs->stdin_io,
                               &cs->srv_writer_io,
                               &cs->stdin_buf,
+                              &cs->stdin_timeout,
                               &cs->srv_writer_timeout,
                               shutdown_srv_writer);
         if (status == -1)
@@ -530,6 +557,7 @@ stdout_cb(EV_P_ ev_io *w, int revents)
                               &cs->srv_reader_io,
                               &cs->stdout_io,
                               &cs->stdout_buf,
+                              &cs->srv_reader_timeout,
                               0, /* no stdout timeout */
                               close_watcher);
         if (status == 0) {
