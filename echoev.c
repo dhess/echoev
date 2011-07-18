@@ -150,6 +150,8 @@ echo_cb(EV_P_ ev_io *w_, int revents)
 
     if (revents & EV_WRITE) {
         log(LOG_DEBUG, "echo_cb write event");
+
+        bool buf_is_full = ringbuf_is_full(w->rb);
         while (w->msg_len) {
             ssize_t n = ringbuf_write(w->io.fd,
                                       w->rb,
@@ -168,6 +170,16 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 w->msg_len -= n;
                 w->timeout.last_activity = ev_now(EV_A);
                 log(LOG_DEBUG, "echo_cb %zd bytes written", n);
+
+                /*
+                 * Re-enable reads if they're paused due to buffer
+                 * pressure.
+                 */
+                if (buf_is_full && !w->half_closed) {
+                    log(LOG_DEBUG, "echo_cb re-starting reads.");
+                    reset_echo_watcher(EV_A_ &w->io, EV_READ | EV_WRITE);
+                    buf_is_full = false;
+                }
             }
         }
         if (w->msg_len == 0) {
@@ -242,9 +254,21 @@ echo_cb(EV_P_ ev_io *w_, int revents)
             }
         }
 
-        /* overflow */
-        log(LOG_WARNING, "read buffer full");
-        stop_echo_watcher(EV_A_ w);
+        /*
+         * If we get here, the buffer is full. If there's a pending
+         * message waiting to be written, disable reads until the
+         * writes free up space. If there's no pending message, we've
+         * overflowed.
+         */
+        if (w->msg_len) {
+            log(LOG_DEBUG,
+                "echo_cb buffer full, disabling reads on fd %d.",
+                w->io.fd);
+            reset_echo_watcher(EV_A_ &w->io, EV_WRITE);
+        } else {
+            log(LOG_WARNING, "Read overflow.");
+            stop_echo_watcher(EV_A_ w);
+        }
     }
 }
 
