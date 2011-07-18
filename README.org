@@ -28,11 +28,17 @@
   - The server uses a per-connection ring buffer to prevent clients
     from DOSing the host (e.g., by writing an endless stream of bytes
     to the server without ever reading any of them back). The ring
-    buffer capacity is 4095 bytes, so the client cannot have more than
-    4095 bytes outstanding to be read from the server, nor can it
-    write a single line greater than 4095 bytes. If the client exceeds
+    buffer capacity is 8192 bytes, so the client cannot have more than
+    8192 bytes outstanding to be read from the server, nor can it
+    write a single line greater than 8192 bytes. If the client exceeds
     its buffer size, the server will unceremoniously close the
     connection.
+
+  - The client also uses a ring buffer (for convenience, not for any
+    kind of security). Its buffer capacity is 32KiB. The client will
+    do what it can to prevent the buffer from overflowing, but the
+    buffer size does limit the maximum line size that can be sent to
+    the server.
 
 * CONTACT
   Drew Hess <dhess-src@bothan.net>
