@@ -31,14 +31,12 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <ctype.h>
-#include <signal.h>
 #include <sys/param.h>
 #include <getopt.h>
 #include <libgen.h>
@@ -47,10 +45,9 @@
 
 #include "logging.h"
 #include "ringbuf.h"
+#include "echo-common.h"
 
 const char *version = "0.9";
-
-const char MSG_DELIMITER = '\n';
 
 static syslog_fun log;
 static setlogmask_fun logmask;
@@ -84,21 +81,6 @@ typedef struct timeout_timer
     ev_timer timer;
     ev_tstamp last_activity;
 } timeout_timer;
-
-typedef struct msg_buf
-{
-    ringbuf_t rb;
-    size_t search_offset;
-    size_t msg_len;
-} msg_buf;
-
-void
-msg_buf_init(msg_buf *buf, size_t capacity)
-{
-    buf->rb = ringbuf_new(capacity);
-    buf->msg_len = 0;
-    buf->search_offset = 0;
-}
 
 /*
  * client_session contains the entirety of the connection state to an
@@ -614,24 +596,6 @@ new_client_session(int stdin_fd, int stdout_fd, int server_fd)
 }
 
 /*
- * Make an existing socket non-blocking.
- *
- * Return 0 if successful, otherwise -1, in which case the error code
- * is left in errno.
- */
-int
-set_nonblocking(int fd)
-{
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1)
-        return -1;
-    flags |= O_NONBLOCK;
-    if (fcntl(fd, F_SETFL, flags) == -1)
-        return -1;
-    return 0;
-}
-
-/*
  * This struct makes it possible to attempt a connection to each known
  * address for the echo server (as returned by getaddrinfo) -- one at
  * a time -- from the libev event loop, without blocking on
@@ -951,12 +915,7 @@ main(int argc, char *argv[])
     logmask(LOG_UPTO(loglevel));
     set_stderr_level_prefix_fun(logging_level_prefix);
     
-    /* Ignore SIGPIPE. */
-    struct sigaction sa, osa;
-    sa.sa_handler = SIG_IGN;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    if (sigaction(SIGPIPE, &sa, &osa) == -1) {
+    if (ignore_sigpipe() == -1) {
         log(LOG_ERR, "Trying to ignore SIGPIPE, but failed: %m");
         exit(1);
     }

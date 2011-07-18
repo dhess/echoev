@@ -31,14 +31,12 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <ctype.h>
-#include <signal.h>
 #include <sys/param.h>
 #include <getopt.h>
 #include <libgen.h>
@@ -47,10 +45,9 @@
 
 #include "logging.h"
 #include "ringbuf.h"
+#include "echo-common.h"
 
 const char *version = "1.0";
-
-const char MSG_DELIMITER = '\n';
 
 static syslog_fun log;
 static setlogmask_fun logmask;
@@ -72,7 +69,9 @@ log_with_addr(int priority,
                           0,
                           NI_NUMERICHOST);
     if (err)
-        log(LOG_ERR, "log_with_addr getnameinfo: %s", gai_strerror(err));
+        log(LOG_WARNING,
+            "log_with_addr getnameinfo failed: %s",
+            gai_strerror(err));
     else
         log(priority, fmt, host);
 }
@@ -87,35 +86,11 @@ typedef struct echo_timer
 typedef struct echo_io
 {
     ev_io io;
-    bool half_closed;
-
-    ringbuf_t rb;
-
-    /* Bytes remaining to be written in a response message. */
-    size_t msg_len;
-    size_t search_offset;
-
+    msg_buf buf;
     echo_timer timeout;
+    bool half_closed;
 } echo_io;
     
-/*
- * Make an existing socket non-blocking.
- *
- * Return 0 if successful, otherwise -1, in which case the error code
- * is left in errno.
- */
-int
-set_nonblocking(int fd)
-{
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1)
-        return -1;
-    flags |= O_NONBLOCK;
-    if (fcntl(fd, F_SETFL, flags) == -1)
-        return -1;
-    return 0;
-}
-
 void
 stop_echo_watcher(EV_P_ echo_io *w)
 {
@@ -143,15 +118,16 @@ echo_cb(EV_P_ ev_io *w_, int revents)
     log(LOG_DEBUG, "echo_cb called");
 
     echo_io *w = (echo_io *) w_;
+    msg_buf *buf = &w->buf;
 
     if (revents & EV_WRITE) {
         log(LOG_DEBUG, "echo_cb write event");
 
-        bool buf_is_full = ringbuf_is_full(w->rb);
-        while (w->msg_len) {
+        bool buf_is_full = ringbuf_is_full(buf->rb);
+        while (buf->msg_len) {
             ssize_t n = ringbuf_write(w->io.fd,
-                                      w->rb,
-                                      w->msg_len);
+                                      buf->rb,
+                                      buf->msg_len);
             if (n == -1) {
                 if ((errno == EAGAIN) ||
                     (errno == EWOULDBLOCK) ||
@@ -163,7 +139,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     return;
                 }
             } else {
-                w->msg_len -= n;
+                buf->msg_len -= n;
                 w->timeout.last_activity = ev_now(EV_A);
                 log(LOG_DEBUG, "echo_cb %zd bytes written", n);
 
@@ -178,18 +154,18 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 }
             }
         }
-        if (w->msg_len == 0) {
-            size_t eol = ringbuf_findchr(w->rb,
+        if (buf->msg_len == 0) {
+            size_t eol = ringbuf_findchr(buf->rb,
                                          MSG_DELIMITER,
-                                         w->search_offset);
-            if (eol < ringbuf_bytes_used(w->rb)) {
-                w->search_offset = 0;
-                w->msg_len = eol + 1;
+                                         buf->search_offset);
+            if (eol < ringbuf_bytes_used(buf->rb)) {
+                buf->search_offset = 0;
+                buf->msg_len = eol + 1;
             } else {
                 if (w->half_closed)
                     stop_echo_watcher(EV_A_ w);
                 else {
-                    w->search_offset = eol;
+                    buf->search_offset = eol;
                     reset_echo_watcher(EV_A_ &w->io, EV_READ);
                 }
             }
@@ -199,16 +175,16 @@ echo_cb(EV_P_ ev_io *w_, int revents)
     if (revents & EV_READ) {
         log(LOG_DEBUG, "echo_cb read event");
         size_t nread = 0;
-        while (ringbuf_bytes_free(w->rb)) {
+        while (ringbuf_bytes_free(buf->rb)) {
             ssize_t n = ringbuf_read(w->io.fd,
-                                     w->rb,
-                                     ringbuf_bytes_free(w->rb));
+                                     buf->rb,
+                                     ringbuf_bytes_free(buf->rb));
             if (n == 0) {
 
                 /* EOF: drain remaining writes or close connection */
                 log(LOG_DEBUG, "echo_cb EOF received");
                 w->timeout.last_activity = ev_now(EV_A);
-                if (w->msg_len) {
+                if (buf->msg_len) {
                     w->half_closed = true;
                     reset_echo_watcher(EV_A_ &w->io, EV_WRITE);
                 } else
@@ -236,16 +212,16 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                  * If there's no pending message to send, look for a
                  * new one. If found, enable writes.
                  */
-                if (w->msg_len == 0) {
-                    size_t eol = ringbuf_findchr(w->rb,
+                if (buf->msg_len == 0) {
+                    size_t eol = ringbuf_findchr(buf->rb,
                                                  MSG_DELIMITER,
-                                                 w->search_offset);
-                    if (eol < ringbuf_bytes_used(w->rb)) {
-                        w->search_offset = 0;
-                        w->msg_len = eol + 1;
+                                                 buf->search_offset);
+                    if (eol < ringbuf_bytes_used(buf->rb)) {
+                        buf->search_offset = 0;
+                        buf->msg_len = eol + 1;
                         reset_echo_watcher(EV_A_ &w->io, EV_WRITE | EV_READ);
                     } else
-                        w->search_offset = eol;
+                        buf->search_offset = eol;
                 }
             }
         }
@@ -256,7 +232,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
          * writes free up space. If there's no pending message, we've
          * overflowed.
          */
-        if (w->msg_len) {
+        if (buf->msg_len) {
             log(LOG_DEBUG,
                 "echo_cb buffer full, disabling reads on fd %d.",
                 w->io.fd);
@@ -307,10 +283,8 @@ make_echo_watcher(EV_P_ int wfd)
 
     echo_io *watcher = malloc(sizeof(echo_io));
     if (watcher) {
-        watcher->rb = ringbuf_new(server_ringbuf_capacity);
+        msg_buf_init(&watcher->buf, server_ringbuf_capacity);
         watcher->half_closed = false;
-        watcher->msg_len = 0;
-        watcher->search_offset = 0;
 
         ev_io *io = &watcher->io;
         ev_io_init(io, echo_cb, wfd, EV_READ);
@@ -611,13 +585,8 @@ main(int argc, char *argv[])
     
     get_stderr_logger(&log, 0, &logmask);
     logmask(LOG_UPTO(loglevel));
-    
-    /* Ignore SIGPIPE. */
-    struct sigaction sa, osa;
-    sa.sa_handler = SIG_IGN;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    if (sigaction(SIGPIPE, &sa, &osa) == -1) {
+
+    if (ignore_sigpipe() == -1) {
         log(LOG_ERR, "Trying to ignore SIGPIPE, but failed: %m");
         exit(1);
     }

@@ -18,11 +18,14 @@ help:
 	@echo "all - build echoev binary."
 	@echo "help - this message."
 
-echoev: logging.o echoev.o ringbuf.o
+echoev: logging.o echoev.o ringbuf.o echo-common.o
 	$(LD) -o echoev $(LDFLAGS) -lev $^
 
-echoevc: logging.o echoevc.o ringbuf.o
+echoevc: logging.o echoevc.o ringbuf.o echo-common.o
 	$(LD) -o echoevc $(LDFLAGS) -lev $^
+
+echo-common.o: echo-common.c echo-common.h ringbuf.h
+	$(CC) $(CFLAGS) -c $< -o $@
 
 logging.o: logging.c logging.h
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -30,10 +33,10 @@ logging.o: logging.c logging.h
 ringbuf.o: ringbuf.c ringbuf.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-echoev.o: echoev.c logging.h ringbuf.h
+echoev.o: echoev.c logging.h ringbuf.h echo-common.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-echoevc.o: echoevc.c logging.h ringbuf.h
+echoevc.o: echoevc.c logging.h ringbuf.h echo-common.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
