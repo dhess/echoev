@@ -7,9 +7,3 @@
 ** Refactor code to share with server implementation.
 
 ** Test on OpenBSD.
-
-* Server
-
-** Make logging/errors more consistent.
-
-*** Look for places where errno is used but not preserved.

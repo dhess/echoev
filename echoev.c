@@ -101,22 +101,18 @@ typedef struct echo_io
 /*
  * Make an existing socket non-blocking.
  *
- * Return 0 if successful, otherwise -1, in which case the error is
- * logged, and the error code is left in errno.
+ * Return 0 if successful, otherwise -1, in which case the error code
+ * is left in errno.
  */
 int
 set_nonblocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1) {
-        log(LOG_ERR, "fcntl: %m");
+    if (flags == -1)
         return -1;
-    }
     flags |= O_NONBLOCK;
-    if (fcntl(fd, F_SETFL, flags) == -1) {
-        log(LOG_ERR, "fcntl: %m");
+    if (fcntl(fd, F_SETFL, flags) == -1)
         return -1;
-    }
     return 0;
 }
 
@@ -162,7 +158,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     (errno == EINTR))
                     break;
                 else {
-                    log(LOG_ERR, "write: %m");
+                    log(LOG_ERR, "Write on descriptor %d failed: %m", w->io.fd);
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
@@ -227,7 +223,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                     /* Nothing more to read for now. */
                     return;
                 } else {
-                    log(LOG_ERR, "read: %m");
+                    log(LOG_ERR, "Read on descriptor %d failed: %m", w->io.fd);
                     stop_echo_watcher(EV_A_ w);
                     return;
                 }
@@ -266,7 +262,7 @@ echo_cb(EV_P_ ev_io *w_, int revents)
                 w->io.fd);
             reset_echo_watcher(EV_A_ &w->io, EV_WRITE);
         } else {
-            log(LOG_WARNING, "Read overflow.");
+            log(LOG_WARNING, "Read overflow on descriptor %d.", w->io.fd);
             stop_echo_watcher(EV_A_ w);
         }
     }
@@ -393,14 +389,14 @@ listen_cb(EV_P_ ev_io *w_, int revents)
                  * Running out of resources; log error and stop
                  * accepting connections for a bit.
                  */
-                log(LOG_ERR, "accept: %m");
+                log(LOG_ERR, "accept failed due to insufficient resources: %m");
                 log(LOG_WARNING, "listen_cb: insufficient resources, backing off for a bit");
                 ev_io_stop(EV_A_ &w->listener);
                 ev_timer_start(EV_A_ &w->cooldown.timer);
                 break;
             }
             else {
-                log(LOG_ERR, "accept: %m");
+                log(LOG_ERR, "Can't accept connection: %m");
                 break;
             }
         }
@@ -411,7 +407,7 @@ listen_cb(EV_P_ ev_io *w_, int revents)
                       addr_len);
         echo_io *watcher = make_echo_watcher(EV_A_ fd);
         if (!watcher) {
-            log(LOG_ERR, "make_echo_watcher: %m");
+            log(LOG_ERR, "Can't create session with client: %m");
             close(fd);
         } else
             ev_io_start(EV_A_ &watcher->io);
@@ -423,36 +419,31 @@ listen_cb(EV_P_ ev_io *w_, int revents)
  * socket address.
  *
  * Return the socket's file descriptor, or -1 if an error occured, in
- * which case the error is logged, the error code is left in errno,
- * and -1 is returned.
+ * which case the error code is left in errno, and -1 is returned.
  */
 int
 listen_on(const struct sockaddr *addr, socklen_t addr_len)
 {
+    int errnum;
+    
     int fd = socket(addr->sa_family, SOCK_STREAM, 0);
-    if (fd == -1) {
-        log(LOG_ERR, "socket: %m");
+    if (fd == -1)
         return -1;
-    }
     if (set_nonblocking(fd) == -1)
         goto err;
     const int on = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) {
-        log(LOG_ERR, "setsockopt: %m");
-        return -1;
-    }
-    if (bind(fd, addr, addr_len) == -1) {
-        log(LOG_ERR, "bind: %m");
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1)
         goto err;
-    }
-    if (listen(fd, 8) == -1) {
-        log(LOG_ERR, "listen: %m");
+    if (bind(fd, addr, addr_len) == -1)
         goto err;
-    }
+    if (listen(fd, 8) == -1)
+        goto err;
     return fd;
 
   err:
+    errnum = errno;
     close(fd);
+    errno = errnum;
     return -1;
 }
 
@@ -546,14 +537,14 @@ main(int argc, char *argv[])
             loglevel = strtol(optarg, 0, 10);
             if (errno || loglevel < 0 || loglevel > 7) {
                 fprintf(stderr, "Log level must be between 0 and 7, inclusive.\n");
-                exit(errno);
+                exit(1);
             }
             break;
         case 'p':
             portstr = strdup(optarg);
             if (!portstr) {
                 perror("strdup");
-                exit(errno);
+                exit(1);
             }
             break;
         case 'i':
@@ -600,7 +591,7 @@ main(int argc, char *argv[])
         ip = (ip_list_t *) malloc(sizeof(ip_list_t));
         if (!ip) {
             perror("malloc");
-            exit(errno);
+            exit(1);
         }
         listen_ips = ip;
         ip->addr = 0;
@@ -609,7 +600,7 @@ main(int argc, char *argv[])
         ip->next = (ip_list_t *) malloc(sizeof(ip_list_t));
         if (!ip->next) {
             perror("malloc");
-            exit(errno);
+            exit(1);
         }
         ip = ip->next;
         ip->addr = 0;
@@ -627,8 +618,8 @@ main(int argc, char *argv[])
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     if (sigaction(SIGPIPE, &sa, &osa) == -1) {
-        log(LOG_ERR, "sigaction: %m");
-        exit(errno);
+        log(LOG_ERR, "Trying to ignore SIGPIPE, but failed: %m");
+        exit(1);
     }
     
     struct ev_loop *loop = EV_DEFAULT;
@@ -646,7 +637,7 @@ main(int argc, char *argv[])
                               &hints,
                               &res);
         if (err) {
-            log(LOG_ERR, "%s", gai_strerror(err));
+            log(LOG_ERR, "getaddrinfo failed: %s", gai_strerror(err));
             exit(err);
         }
         assert(!res->ai_next);
@@ -658,9 +649,10 @@ main(int argc, char *argv[])
                           res->ai_addr,
                           res->ai_addrlen);
             ev_io_start(loop, &lio->listener);
+        } else {
+            log(LOG_ERR, "Can't create listening socket: %m");
+            exit(1);
         }
-        else
-            exit(errno);
         freeaddrinfo(res);
     }
 
