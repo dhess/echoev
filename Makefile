@@ -37,6 +37,6 @@ echoevc.o: echoevc.c logging.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f echoev *.o
+	rm -f echoev echoevc *.o
 
 .PHONY:	clean
