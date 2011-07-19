@@ -1,32 +1,17 @@
 /*
  * logging.c
- * A simple and reasonably flexible logging mechanism.
+ * A syslog(3)-compatible logging mechanism.
  *
- * Copyright (c) 2011 Drew Hess <dhess-src@bothan.net>
+ * Written in 2011 by Drew Hess <dhess-src@bothan.net>.
  *
- * Thanks to Kevin Bowling for the idea of wrapping syslog for
- * interactive output, described here:
- * http://www.kev009.com/wp/2010/12/no-nonsense-logging-in-c-and-cpp/
+ * To the extent possible under law, the author(s) have dedicated all
+ * copyright and related and neighboring rights to this software to
+ * the public domain worldwide. This software is distributed without
+ * any warranty.
  *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * You should have received a copy of the CC0 Public Domain Dedication
+ * along with this software. If not, see
+ * <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
 #include "logging.h"
@@ -44,7 +29,7 @@
  * returns a new null-terminated string whose contents are identical
  * to s1, except that all occurrences of s2 in the original string s1
  * are, in the new string, replaced by the string s3. The caller owns
- * the new string.
+ * the new string and is responsible for freeing it.
  *
  * Strings s1, s2, and s3 must all be null-terminated strings.
  *
@@ -53,7 +38,7 @@
  * is no way to determine the nature of the error from the call site.
  */
 
-char *
+static char *
 strrep(const char *s1, const char *s2, const char *s3)
 {
     if (!s1 || !s2 || !s3)
@@ -89,18 +74,18 @@ strrep(const char *s1, const char *s2, const char *s3)
      */
     size_t s1_without_s2_len = s1_len - count * s2_len;
     size_t s3_len = strlen(s3);
-    size_t s1_with_s3_len = s1_without_s2_len + count * s3_len;
+    size_t newstr_len = s1_without_s2_len + count * s3_len;
     if (s3_len &&
-        ((s1_with_s3_len <= s1_without_s2_len) || (s1_with_s3_len + 1 == 0)))
+        ((newstr_len <= s1_without_s2_len) || (newstr_len + 1 == 0)))
         /* Overflow. */
         return 0;
     
-    char *s1_with_s3 = (char *)malloc(s1_with_s3_len + 1); /* w/ terminator */
-    if (!s1_with_s3)
+    char *newstr = (char *)malloc(newstr_len + 1); /* w/ terminator */
+    if (!newstr)
         /* ENOMEM, but no good way to signal it. */
         return 0;
     
-    char *dst = s1_with_s3;
+    char *dst = newstr;
     const char *start_substr = s1;
     size_t i;
     for (i = 0; i != count; ++i) {
@@ -116,7 +101,7 @@ strrep(const char *s1, const char *s2, const char *s3)
     /* copy remainder of s1, including trailing '\0' */
     size_t remains = s1_len - (start_substr - s1) + 1;
     memcpy(dst, start_substr, remains);
-    return s1_with_s3;
+    return newstr;
 }
 
 void get_syslog_logger(syslog_fun *logger,
@@ -132,10 +117,9 @@ void get_syslog_logger(syslog_fun *logger,
 }
 
 /*
- * XXX dhess - to make this thread-safe/reentrant, need to make
+ * XXX - to make this thread-safe/reentrant, need to make
  * stderr_logmask per-thread/per-context.
  */
-
 static int stderr_logmask = LOG_UPTO(LOG_DEBUG);
 
 static int
@@ -149,7 +133,7 @@ stderr_setlogmask(int mask)
 }
 
 const char *
-level_prefix(int priority)
+logging_level_prefix(int priority)
 {
     /*
      * Using LOG_PRI probably isn't standard, but I don't know a more
@@ -179,8 +163,8 @@ level_prefix(int priority)
     }
 }
 
-/* XXX dhess - not thread-safe. */
-static level_prefix_fun stderr_level_prefix_fn = level_prefix;
+/* XXX - not thread-safe. */
+static level_prefix_fun stderr_level_prefix_fn = logging_level_prefix;
 
 level_prefix_fun
 set_stderr_level_prefix_fun(level_prefix_fun new_fn)

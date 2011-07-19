@@ -819,7 +819,7 @@ print_version(const char *name)
 }
 
 const char *
-logging_level_prefix(int priority)
+my_logging_level_prefix(int priority)
 {
     switch (LOG_PRI(priority)) {
     case LOG_DEBUG:
@@ -921,7 +921,7 @@ main(int argc, char *argv[])
     
     get_stderr_logger(&log, 0, &logmask);
     logmask(LOG_UPTO(loglevel));
-    set_stderr_level_prefix_fun(logging_level_prefix);
+    set_stderr_level_prefix_fun(my_logging_level_prefix);
     
     if (ignore_sigpipe() == -1) {
         log(LOG_ERR, "Trying to ignore SIGPIPE, but failed: %m");
