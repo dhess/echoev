@@ -19,10 +19,13 @@
 * LICENSE
   Most of the code is licensed under the MIT license.
 
-  The code in ringbuf.[ch] is dedicated to the public domain under the
-  terms of the Creative Commons CC0 public domain dedication. See
-  http://creativecommons.org/publicdomain/zero/1.0/legalcode for
-  details.
+  The code in ringbuf.[ch] and logging.[ch] is dedicated to the public
+  domain under the terms of the Creative Commons CC0 public domain
+  dedication. See
+
+  http://creativecommons.org/publicdomain/zero/1.0/legalcode 
+
+  for details.
 
 * BUGS/LIMITATIONS
   - The server uses a per-connection ring buffer to prevent clients
